@@ -1,0 +1,418 @@
+{
+  "documents": [
+    {
+      "id": "d00",
+      "text": "The Larch gateway waits 240 milliseconds before retrying a failed request.",
+      "kind": "durable",
+      "importance": 1.0,
+      "age_days": 0
+    },
+    {
+      "id": "d01",
+      "text": "Сервис Кедр хранит резервные копии в течение 18 дней.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 90
+    },
+    {
+      "id": "d02",
+      "text": "The Nimbus queue accepts at most 64 tasks in a batch.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 365
+    },
+    {
+      "id": "d03",
+      "text": "Для проекта Ручей выбрана лицензия Apache 2.0.",
+      "kind": "durable",
+      "importance": 0.5,
+      "age_days": 0
+    },
+    {
+      "id": "d04",
+      "text": "The fictional conservatory waters its orchids every Thursday morning.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 90
+    },
+    {
+      "id": "d05",
+      "text": "В вымышленной мастерской керамику обжигают при 980 градусах.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 365
+    },
+    {
+      "id": "d06",
+      "text": "The Coral deployment requires approval from two reviewers.",
+      "kind": "durable",
+      "importance": 1.0,
+      "age_days": 0
+    },
+    {
+      "id": "d07",
+      "text": "Датчик Маяк передаёт показания каждые 45 секунд.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 90
+    },
+    {
+      "id": "d08",
+      "text": "The fictional editor prefers concise responses with concrete examples.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 365
+    },
+    {
+      "id": "d09",
+      "text": "The local cache is cleared whenever the application exits.",
+      "kind": "durable",
+      "importance": 0.5,
+      "age_days": 0
+    },
+    {
+      "id": "d10",
+      "text": "Harbor-26 listens on TCP port 7421.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 90
+    },
+    {
+      "id": "d11",
+      "text": "Harbor-62 listens on TCP port 7429.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 365
+    }
+  ],
+  "queries": [
+    {
+      "id": "q00",
+      "query": "How long does Larch pause before another attempt?",
+      "gold": [
+        "d00"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q01",
+      "query": "Какова задержка повторного запроса у шлюза Larch?",
+      "gold": [
+        "d00"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q02",
+      "query": "Who maintains the Larch gateway?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q03",
+      "query": "When are backups deleted by the Кедр service?",
+      "gold": [
+        "d01"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q04",
+      "query": "Через сколько суток Кедр удаляет резервные копии?",
+      "gold": [
+        "d01"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q05",
+      "query": "Какой порт слушает сервис Кедр?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q06",
+      "query": "How many jobs fit in one Nimbus batch?",
+      "gold": [
+        "d02"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q07",
+      "query": "Сколько заданий помещается в пакет Nimbus?",
+      "gold": [
+        "d02"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q08",
+      "query": "Does Nimbus encrypt queued tasks?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q09",
+      "query": "Which license governs the Ручей project?",
+      "gold": [
+        "d03"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q10",
+      "query": "На каких лицензионных условиях распространяется Ручей?",
+      "gold": [
+        "d03"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q11",
+      "query": "Кто автор проекта Ручей?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q12",
+      "query": "When do the greenhouse orchids get watered?",
+      "gold": [
+        "d04"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q13",
+      "query": "В какое утро поливают орхидеи в оранжерее?",
+      "gold": [
+        "d04"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q14",
+      "query": "What fertilizer do the conservatory orchids receive?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q15",
+      "query": "How hot is the kiln when this workshop fires pottery?",
+      "gold": [
+        "d05"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q16",
+      "query": "Какова температура обжига в мастерской?",
+      "gold": [
+        "d05"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q17",
+      "query": "Сколько стоит керамика из мастерской?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q18",
+      "query": "How many people must sign off before Coral ships?",
+      "gold": [
+        "d06"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q19",
+      "query": "Сколько рецензентов должны одобрить развёртывание Coral?",
+      "gold": [
+        "d06"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q20",
+      "query": "What is the rollback deadline for Coral?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q21",
+      "query": "How often does Маяк send sensor readings?",
+      "gold": [
+        "d07"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q22",
+      "query": "С каким интервалом Маяк отправляет измерения?",
+      "gold": [
+        "d07"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q23",
+      "query": "Какова точность датчика Маяк?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q24",
+      "query": "What style of explanation does the editor favor?",
+      "gold": [
+        "d08"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q25",
+      "query": "Как редактор предпочитает получать объяснения?",
+      "gold": [
+        "d08"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q26",
+      "query": "Which language does the fictional editor speak?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q27",
+      "query": "What happens to cached data on program shutdown?",
+      "gold": [
+        "d09"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q28",
+      "query": "Что происходит с кэшем при завершении программы?",
+      "gold": [
+        "d09"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q29",
+      "query": "Where is the application cache directory?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q30",
+      "query": "Which network port accepts Harbor-26 connections?",
+      "gold": [
+        "d10"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q31",
+      "query": "К какому TCP порту подключаться в Harbor-26?",
+      "gold": [
+        "d10"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q32",
+      "query": "Which network port accepts Harbor-29 connections?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q33",
+      "query": "What is the TCP endpoint port for Harbor-62?",
+      "gold": [
+        "d11"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q34",
+      "query": "Какой порт настроен у Harbor-62?",
+      "gold": [
+        "d11"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q35",
+      "query": "What is the TLS certificate expiry date for Harbor-62?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q36",
+      "query": "How far away is the nearest pulsar?",
+      "gold": [],
+      "language": "en",
+      "category": "far_noanswer"
+    },
+    {
+      "id": "q37",
+      "query": "Как приготовить клубничное мороженое?",
+      "gold": [],
+      "language": "ru",
+      "category": "far_noanswer"
+    },
+    {
+      "id": "q38",
+      "query": "Who won the fictional city chess final?",
+      "gold": [],
+      "language": "en",
+      "category": "far_noanswer"
+    },
+    {
+      "id": "q39",
+      "query": "Какой курс обмена лунных монет?",
+      "gold": [],
+      "language": "ru",
+      "category": "far_noanswer"
+    }
+  ]
+}

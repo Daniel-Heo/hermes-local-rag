@@ -1,8 +1,8 @@
 # Hermes Local RAG
 
-> **1.4.0:** shared private inference daemon and selectively curated durable images.
-> Read [UPGRADE.md](UPGRADE.md) before upgrading: image-save approval metadata is now
-> required, legacy images are not automatically promoted, and inference starts on demand.
+> **1.5.0:** atomic memory corrections, scoped deletion, and stronger retrieval/evidence guidance.
+> Read [CHANGELOG.md](CHANGELOG.md) for changes and limitations, and
+> [UPGRADE.md](UPGRADE.md) for the shared-inference and curated-image migration introduced in 1.4.0.
 > See the [synthetic benchmark and its limitations](evaluation/README.md).
 
 [![Hermes Local RAG — private local memory that keeps the useful card and bins the noise](https://raw.githubusercontent.com/condr-at/hermes-local-rag/main/assets/branding/local-rag-preview-1600x900.webp)](https://github.com/condr-at/hermes-local-rag)
@@ -15,6 +15,7 @@ Private, fully local hybrid text and visual memory for [Hermes Agent](https://gi
 - SQLite + FTS5 + vector similarity, score thresholds, freshness/importance boosts, source diversity, and bounded context injection
 - Physical profile/user namespaces before retrieval
 - Explicit contextual admission through `local_rag_remember`, with normalized atomic items instead of raw turns
+- In-place `local_rag_update` corrections with exact-text conflict detection, stable identity, immutable scope/provenance, and transactional rollback
 - Selective historical backfill with pre-LLM filtering, structured extraction, resumable preview, human review, and explicit apply
 - Independent scope, durability, status, confidence, importance, provenance, deduplication, deletion, migrations, and backups
 - Project- and session-aware retrieval boundaries; built-in Markdown memory is mirrored as global durable context
@@ -31,7 +32,7 @@ For packaged-provider discovery, install it into the same Python environment tha
 > Upgrading from 1.3.2 or older: stop every Hermes Desktop and gateway process first. Version 1.4.0 performs a one-time, integrity-checked migration from `memory.sqlite` / `visual.sqlite` to backup-safe `.db` files and removes the legacy files after success.
 
 ```bash
-python -m pip install hermes-local-rag==1.4.0
+python -m pip install hermes-local-rag==1.5.0
 hermes config set memory.provider local_rag
 ```
 

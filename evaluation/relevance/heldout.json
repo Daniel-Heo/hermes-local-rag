@@ -1,0 +1,418 @@
+{
+  "documents": [
+    {
+      "id": "d00",
+      "text": "The Juniper worker stops after five consecutive failures.",
+      "kind": "durable",
+      "importance": 1.0,
+      "age_days": 0
+    },
+    {
+      "id": "d01",
+      "text": "Система Осина сжимает журналы старше девяти суток.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 90
+    },
+    {
+      "id": "d02",
+      "text": "The Mosaic importer processes at most 150 records per transaction.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 365
+    },
+    {
+      "id": "d03",
+      "text": "Проект Залив использует базу данных PostgreSQL.",
+      "kind": "durable",
+      "importance": 0.5,
+      "age_days": 0
+    },
+    {
+      "id": "d04",
+      "text": "The fictional library opens its reading room at half past eight.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 90
+    },
+    {
+      "id": "d05",
+      "text": "В вымышленной пекарне тесто оставляют подниматься на два часа.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 365
+    },
+    {
+      "id": "d06",
+      "text": "The Quartz release is postponed whenever a critical test fails.",
+      "kind": "durable",
+      "importance": 1.0,
+      "age_days": 0
+    },
+    {
+      "id": "d07",
+      "text": "Спутник Искра передаёт фотографии только при дневном освещении.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 90
+    },
+    {
+      "id": "d08",
+      "text": "The fictional illustrator asks for feedback as annotated sketches.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 365
+    },
+    {
+      "id": "d09",
+      "text": "All unsent drafts are restored when the mail application starts again.",
+      "kind": "durable",
+      "importance": 0.5,
+      "age_days": 0
+    },
+    {
+      "id": "d10",
+      "text": "Cove-37 stores archives for 28 days.",
+      "kind": "episodic",
+      "importance": 1.0,
+      "age_days": 90
+    },
+    {
+      "id": "d11",
+      "text": "Cove-73 uses Zstandard compression for archives.",
+      "kind": "episodic",
+      "importance": 0.5,
+      "age_days": 365
+    }
+  ],
+  "queries": [
+    {
+      "id": "q00",
+      "query": "After how many failed attempts does Juniper give up?",
+      "gold": [
+        "d00"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q01",
+      "query": "Сколько ошибок подряд останавливают Juniper?",
+      "gold": [
+        "d00"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q02",
+      "query": "Who owns the Juniper worker?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q03",
+      "query": "When does Осина compress old logs?",
+      "gold": [
+        "d01"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q04",
+      "query": "Через сколько дней журналы Осина сжимаются?",
+      "gold": [
+        "d01"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q05",
+      "query": "Где расположены серверы Осина?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q06",
+      "query": "How many entries can Mosaic import in one transaction?",
+      "gold": [
+        "d02"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q07",
+      "query": "Сколько записей Mosaic обрабатывает за транзакцию?",
+      "gold": [
+        "d02"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q08",
+      "query": "What input character encoding does Mosaic require?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q09",
+      "query": "Which database engine backs the Залив project?",
+      "gold": [
+        "d03"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q10",
+      "query": "Какая СУБД выбрана для проекта Залив?",
+      "gold": [
+        "d03"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q11",
+      "query": "Какой размер пула соединений у Залив?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q12",
+      "query": "At what time can readers enter the library reading room?",
+      "gold": [
+        "d04"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q13",
+      "query": "Во сколько открывается читальный зал библиотеки?",
+      "gold": [
+        "d04"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q14",
+      "query": "What is the library membership fee?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q15",
+      "query": "How long does the bakery let its dough rise?",
+      "gold": [
+        "d05"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q16",
+      "query": "Сколько времени подходит тесто в пекарне?",
+      "gold": [
+        "d05"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q17",
+      "query": "Сколько буханок в день продаёт пекарня?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q18",
+      "query": "What prevents Quartz from being released?",
+      "gold": [
+        "d06"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q19",
+      "query": "При каком результате тестирования откладывается выпуск Quartz?",
+      "gold": [
+        "d06"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q20",
+      "query": "What is the scheduled launch date for Quartz?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q21",
+      "query": "Under what lighting conditions does Искра transmit photos?",
+      "gold": [
+        "d07"
+      ],
+      "language": "en",
+      "category": "cross_language"
+    },
+    {
+      "id": "q22",
+      "query": "При каком освещении Искра отправляет снимки?",
+      "gold": [
+        "d07"
+      ],
+      "language": "ru",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q23",
+      "query": "Каково разрешение камеры спутника Искра?",
+      "gold": [],
+      "language": "ru",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q24",
+      "query": "How should suggestions be presented to the illustrator?",
+      "gold": [
+        "d08"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q25",
+      "query": "В каком виде иллюстратор хочет получать замечания?",
+      "gold": [
+        "d08"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q26",
+      "query": "Which tablet does the fictional illustrator use?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q27",
+      "query": "What happens to unfinished messages after reopening the mail app?",
+      "gold": [
+        "d09"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q28",
+      "query": "Что станет с неотправленными письмами после перезапуска почты?",
+      "gold": [
+        "d09"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q29",
+      "query": "How long does the mail app retain sent messages?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q30",
+      "query": "How long does Cove-37 keep archived files?",
+      "gold": [
+        "d10"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q31",
+      "query": "Каков срок хранения архивов Cove-37?",
+      "gold": [
+        "d10"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q32",
+      "query": "How long does Cove-73 keep archived files?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q33",
+      "query": "Which compression format does Cove-73 use?",
+      "gold": [
+        "d11"
+      ],
+      "language": "en",
+      "category": "paraphrase"
+    },
+    {
+      "id": "q34",
+      "query": "Каким алгоритмом сжимаются архивы Cove-73?",
+      "gold": [
+        "d11"
+      ],
+      "language": "ru",
+      "category": "cross_language"
+    },
+    {
+      "id": "q35",
+      "query": "What encryption algorithm protects Cove-73 archives?",
+      "gold": [],
+      "language": "en",
+      "category": "near_noanswer"
+    },
+    {
+      "id": "q36",
+      "query": "How many moons orbit the imaginary planet?",
+      "gold": [],
+      "language": "en",
+      "category": "far_noanswer"
+    },
+    {
+      "id": "q37",
+      "query": "Как сшить льняную рубашку?",
+      "gold": [],
+      "language": "ru",
+      "category": "far_noanswer"
+    },
+    {
+      "id": "q38",
+      "query": "What is the score of the imaginary hockey match?",
+      "gold": [],
+      "language": "en",
+      "category": "far_noanswer"
+    },
+    {
+      "id": "q39",
+      "query": "Где спрятан пиратский клад?",
+      "gold": [],
+      "language": "ru",
+      "category": "far_noanswer"
+    }
+  ]
+}

@@ -27,8 +27,23 @@ models/
 # Private evaluation runs and local duplicate source are never distributable.
 evaluation/*
 !evaluation/README.md
+# Relevance evaluation is synthetic-only and uses temporary databases.
+!evaluation/relevance_benchmark.py
+!evaluation/relevance_baseline.py
+!evaluation/relevance/
+evaluation/relevance/*
+!evaluation/relevance/calibration.json
+!evaluation/relevance/heldout.json
+!evaluation/relevance/protocol.json
 local_rag/provider 2.py
 *.db
 *.db-*
 *.zip
 *.tar.gz
+
+# Visual evaluation remains local; publish fixtures only after explicit review.
+
+# Raw local runs remain private even inside an allowed synthetic fixture tree.
+evaluation/**/native-run-*/
+evaluation/**/run-*/
+evaluation/**/runs/

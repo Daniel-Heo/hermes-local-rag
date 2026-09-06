@@ -229,10 +229,16 @@ def main() -> int:
     config = LocalRagConfig.load(args.home)
     store = MemoryStore(db, dimensions=config.embedding_dimensions)
     try:
+        current_project = Path.cwd().resolve()
+        # This standalone entrypoint has no runtime-bound session authority.
+        # Caller-provided session environment variables cannot grant access.
+        session_id = ""
         if args.command == "status":
             output = {"database": str(db), "namespaces": store.namespaces()}
         elif args.command == "forget":
-            output = {"removed": store.delete(args.namespace, args.id)}
+            output = {"removed": store.delete(
+                args.namespace, args.id, project=str(current_project), session_id=session_id,
+            )}
         elif args.command == "review":
             output = {"candidates": store.list_candidates(args.namespace)}
         elif args.command == "reject":
@@ -241,8 +247,9 @@ def main() -> int:
             output = {"removed": store.prune(args.namespace)}
         else:
             embedder = InferenceClient(Path(args.home).expanduser(), dimensions=config.embedding_dimensions)
-            roots = [Path(getattr(args, "root", Path.cwd())).expanduser().resolve()]
+            roots = [Path(getattr(args, "root", current_project)).expanduser().resolve()]
             service = LocalRagService(store=store, embedder=embedder, namespace=args.namespace, allowed_roots=roots)
+            service.session_id = session_id
             if args.command == "search":
                 output = {"results": [item.__dict__ for item in service.search(args.query, limit=args.limit)]}
             elif args.command == "approve":

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "dimensions": 512,
+  "threshold_grid": [
+    0.3,
+    0.325,
+    0.35,
+    0.375,
+    0.4,
+    0.425,
+    0.45,
+    0.475,
+    0.5,
+    0.525,
+    0.55,
+    0.575,
+    0.6,
+    0.625,
+    0.65,
+    0.675,
+    0.7,
+    0.725,
+    0.75,
+    0.775,
+    0.8
+  ],
+  "selection": "Minimize calibration noanswer FPR subject to Recall@5 and cross-language Recall@5 each losing at most 0.05 absolute versus baseline; tie: higher Recall@5, then lower threshold. No heldout tuning.",
+  "maximum_recall_loss": 0.05,
+  "baseline_version": "1.4.0",
+  "splits": {
+    "calibration": "4b54f013a8827b1e4bc91e15ed28569088b7efdc72c8186eb253401121c48dfb",
+    "heldout": "3b314eb131b9c372ea54d4479b3c60f922e2ab96664f4d73f4039410d449bfbb"
+  },
+  "scope": "Text branch before production RRF; images/captions unchanged. Synthetic only; no answer generation.",
+  "status": "Preregistered before model calls and threshold tuning."
+}

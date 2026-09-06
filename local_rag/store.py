@@ -24,7 +24,14 @@ class SearchResult:
 
 
 class MemoryStore:
-    def __init__(self, path: Path, *, dimensions: int) -> None:
+    def __init__(self, path: Path, *, dimensions: int, semantic_threshold: float = 0.3) -> None:
+        # Admission is independent of lexical/metadata ranking bonuses. The
+        # default was selected on the separate synthetic calibration split.
+        # See evaluation/relevance/run-02; this is a similarity floor, not
+        # a probability or proof that a document contains the answer.
+        if isinstance(semantic_threshold, bool) or not math.isfinite(semantic_threshold) or not 0 < semantic_threshold <= 1:
+            raise ValueError("semantic_threshold must be finite and in (0, 1]")
+        self.semantic_threshold = semantic_threshold
         self.path = Path(path)
         self.dimensions = dimensions
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +81,10 @@ class MemoryStore:
                 END;
                 CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
                     INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                END;
+                CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF text ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                    INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
                 END;
                 CREATE TABLE IF NOT EXISTS candidates (
                     id INTEGER PRIMARY KEY,
@@ -154,6 +165,124 @@ class MemoryStore:
             inserted += int(self.add(namespace, source=source, **record))
         return inserted
 
+    @staticmethod
+    def _scope_predicate(project: str, session_id: str, *, prefix: str = "") -> tuple[str, tuple[str, ...]]:
+        """Visibility and mutation authority, including legacy unscoped text rows.
+
+        Empty runtime identities cannot authorize explicit project/session rows.
+        A project column on legacy or inconsistent metadata is still a boundary.
+        """
+        metadata, project_column = f"{prefix}metadata_json", f"{prefix}project"
+        scope = f"json_extract({metadata},'$.scope')"
+        return (
+            f" AND ({project_column}='' OR (?<>'' AND {project_column}=?)) AND ("
+            f"{scope} IS NULL OR {scope}='global' OR "
+            f"({scope}='project' AND ?<>'' AND {project_column}=?) OR "
+            f"({scope}='session' AND ?<>'' AND json_extract({metadata},'$.session_id')=?))",
+            (project, project, project, project, session_id, session_id),
+        )
+
+    def _editable_memory_item(self, namespace: str, memory_id: int, *, project: str, session_id: str) -> sqlite3.Row | None:
+        visibility, values = self._scope_predicate(project, session_id)
+        row = self._conn.execute(
+            "SELECT * FROM memories WHERE namespace=? AND id=? AND kind='memory_item' "
+            "AND (expires_at IS NULL OR expires_at>?)" + visibility,
+            (namespace, memory_id, time.time(), *values),
+        ).fetchone()
+        if row is not None:
+            metadata = json.loads(row["metadata_json"])
+            origin = metadata.get("session_id")
+            if (metadata.get("scope") in {"global", "project", "session"}
+                    and isinstance(origin, str) and origin
+                    and row["source"] in {f"agent:{origin}", f"historical-session:{origin}"}):
+                return row
+        return None
+
+    def memory_item_for_update(self, namespace: str, memory_id: int, *, project: str, session_id: str) -> dict | None:
+        """Internal preflight snapshot; never returned through the model tool."""
+        with self._lock:
+            row = self._editable_memory_item(namespace, memory_id, project=project, session_id=session_id)
+            return dict(row) if row is not None else None
+
+    def update_memory_item(
+        self, namespace: str, memory_id: int, *, expected_text: str, expected_row: dict,
+        item: dict, embedding: Iterable[float], project: str, session_id: str,
+    ) -> str:
+        # Materialize and check expensive/generator embeddings before a write lock.
+        vector = list(embedding)
+        if len(vector) != self.dimensions or not all(math.isfinite(value) for value in vector):
+            raise ValueError("Invalid replacement embedding")
+        encoded = array("f", vector)
+        # Check the representation that will be stored: nonzero Python floats
+        # can underflow to zero in float32, making the vector unusable in search.
+        if not all(math.isfinite(value) for value in encoded) or not any(encoded):
+            raise ValueError("Invalid replacement embedding")
+        packed = encoded.tobytes()
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._editable_memory_item(namespace, memory_id, project=project, session_id=session_id)
+                if row is None:
+                    self._conn.rollback()
+                    return "unavailable"
+                # Ignore read bookkeeping, but reject replacement/reassignment or
+                # concurrent semantic/metadata writes during embedding preparation.
+                compared = set(expected_row) - {"accessed_at", "access_count"}
+                if row["text"] != expected_text or any(row[key] != expected_row[key] for key in compared):
+                    self._conn.rollback()
+                    return "conflict"
+                metadata = json.loads(row["metadata_json"])
+                scope = metadata["scope"]
+                identity = row["project"] if scope == "project" else metadata["session_id"] if scope == "session" else ""
+                normalized = " ".join(item["text"].casefold().split())
+                digest = hashlib.sha256(f"memory_item\0{scope}\0{identity}\0{normalized}".encode()).hexdigest()
+                # Historical items can have different hashes. Only a duplicate
+                # visible to this caller may cause a semantic conflict.
+                visibility, values = self._scope_predicate(project, session_id)
+                for other in self._conn.execute(
+                    "SELECT text,project,metadata_json FROM memories WHERE namespace=? AND kind='memory_item' AND id<>? "
+                    "AND (expires_at IS NULL OR expires_at>?)" + visibility,
+                    (namespace, memory_id, time.time(), *values),
+                ):
+                    other_meta = json.loads(other["metadata_json"])
+                    other_identity = other["project"] if scope == "project" else other_meta.get("session_id") if scope == "session" else ""
+                    if other_meta.get("scope") == scope and other_identity == identity and " ".join(other["text"].casefold().split()) == normalized:
+                        self._conn.rollback()
+                        return "conflict"
+                # A hidden/expired or unrelated legacy row may own the canonical
+                # UNIQUE key. Preserve it, and give this row an unused storage
+                # key so the tool outcome cannot confirm a guess at hidden text.
+                canonical_digest, collision = digest, 0
+                while self._conn.execute(
+                    "SELECT 1 FROM memories WHERE namespace=? AND content_hash=? AND id<>?",
+                    (namespace, digest, memory_id),
+                ).fetchone() is not None:
+                    collision += 1
+                    digest = hashlib.sha256(
+                        f"memory_item_replacement\0{memory_id}\0{collision}\0{canonical_digest}".encode()
+                    ).hexdigest()
+                for field in ("subject", "durability", "confidence", "tags"):
+                    if field in item:
+                        metadata[field] = item[field]
+                metadata["updated_by_session"] = session_id
+                metadata["updated_at"] = time.time()
+                # No INSERT/DELETE of the memory: identity, source and scope stay
+                # fixed. The UPDATE trigger changes FTS in this same transaction.
+                cursor = self._conn.execute(
+                    "UPDATE memories SET text=?,content_hash=?,embedding=?,confidence=?,importance=?,metadata_json=? "
+                    "WHERE id=? AND namespace=? AND text=?",
+                    (item["text"], digest, packed, item.get("confidence", row["confidence"]),
+                     item.get("importance", row["importance"]), json.dumps(metadata), memory_id, namespace, expected_text),
+                )
+                if cursor.rowcount != 1:
+                    self._conn.rollback()
+                    return "conflict"
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+        return "updated"
+
     def search(
         self,
         namespace: str,
@@ -173,20 +302,8 @@ class MemoryStore:
             lexical_visibility = ""
             visibility_args: tuple[str, ...] = ()
             if project is not None and session_id is not None:
-                def visibility_clause(prefix: str) -> str:
-                    metadata = f"{prefix}metadata_json"
-                    project_column = f"{prefix}project"
-                    return (
-                    " AND ("
-                    f"(json_extract({metadata},'$.scope') IS NULL AND ({project_column}='' OR {project_column}=?)) OR "
-                    f"json_extract({metadata},'$.scope')='global' OR "
-                    f"(json_extract({metadata},'$.scope')='project' AND {project_column}=?) OR "
-                    f"(json_extract({metadata},'$.scope')='session' AND json_extract({metadata},'$.session_id')=?)"
-                    ")"
-                    )
-                visibility = visibility_clause("")
-                lexical_visibility = visibility_clause("m.")
-                visibility_args = (project, project, session_id)
+                visibility, visibility_args = self._scope_predicate(project, session_id)
+                lexical_visibility, _ = self._scope_predicate(project, session_id, prefix="m.")
             rows = self._conn.execute(
                 "SELECT id,text,source,embedding,kind,confidence,importance,created_at "
                 "FROM memories WHERE namespace=? AND (expires_at IS NULL OR expires_at>?)" + visibility,
@@ -208,6 +325,11 @@ class MemoryStore:
         for row in rows:
             memory_id = int(row["id"])
             semantic = self._cosine(qvec, array("f", row["embedding"]))
+            # Gate all rows before bonuses, top-k, access bookkeeping and RRF.
+            # No shared-word requirement: bilingual paraphrases can qualify on
+            # semantic evidence alone. FTS matches cannot override this floor.
+            if not math.isfinite(semantic) or semantic < self.semantic_threshold:
+                continue
             age_days = max(0.0, (now - float(row["created_at"])) / 86400)
             freshness = 1.0 / (1.0 + age_days / 90.0)
             durable_bonus = 0.08 if row["kind"] == "durable" else 0.0
@@ -263,9 +385,13 @@ class MemoryStore:
             cursor = self._conn.execute("UPDATE candidates SET status='rejected' WHERE id=? AND namespace=? AND status='pending'", (candidate_id, namespace))
         return cursor.rowcount == 1
 
-    def delete(self, namespace: str, memory_id: int) -> bool:
+    def delete(self, namespace: str, memory_id: int, *, project: str = "", session_id: str = "") -> bool:
+        visibility, values = self._scope_predicate(project, session_id)
         with self._lock, self._conn:
-            cursor = self._conn.execute("DELETE FROM memories WHERE namespace=? AND id=?", (namespace, memory_id))
+            cursor = self._conn.execute(
+                "DELETE FROM memories WHERE namespace=? AND id=? AND (expires_at IS NULL OR expires_at>?)" + visibility,
+                (namespace, memory_id, time.time(), *values),
+            )
         return cursor.rowcount == 1
 
     def delete_source_containing(self, namespace: str, source: str, needle: str) -> int:

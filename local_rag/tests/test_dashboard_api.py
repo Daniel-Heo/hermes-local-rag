@@ -103,12 +103,13 @@ def test_status_projects_config_and_reports_disk_and_database(client: TestClient
 def test_config_validates_ttls_and_never_reindexes(client: TestClient) -> None:
     assert client.post("/setup/config", json={"embedding_dimensions": 64}).status_code == 422
     assert client.post("/setup/config", json={"embedding_dimensions": 128, "episodic_ttl_days": 0}).status_code == 422
-    response = client.post("/setup/config", json={"embedding_dimensions": 768, "episodic_ttl_days": None, "summary_ttl_days": 2.5, "visual_enabled": True})
+    response = client.post("/setup/config", json={"embedding_dimensions": 768, "episodic_ttl_days": None, "summary_ttl_days": 2.5, "visual_enabled": True, "debug_enabled": True})
     assert response.status_code == 200
     assert response.json()["reindex_performed"] is False
     path = Path(api.os.environ["HERMES_HOME"]) / "local-rag" / "config.json"
     assert json.loads(path.read_text())["embedding_dimensions"] == 768
     assert json.loads(path.read_text())["visual_enabled"] is True
+    assert json.loads(path.read_text())["debug_enabled"] is True
     assert path.stat().st_mode & 0o777 == 0o600
 
 
@@ -324,6 +325,7 @@ def test_dashboard_ui_uses_protected_setup_contract() -> None:
     assert "hf auth login" not in script
     assert 'terms_accepted: acceptedTerms' in script
     assert 'visual_enabled: mode === "visual"' in script
+    assert "debug_enabled: debugEnabled" in script
     assert 'type: "radio"' in script
     assert 'name: "local-rag-model-mode"' in script
     assert 'name: "local-rag-retention"' in script

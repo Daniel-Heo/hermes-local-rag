@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0 — 2026-09-13
+
+- Added an off-by-default memory diagnostics checkbox in Local RAG's own settings, not the host application.
+- Completed responses can show provider prefetch, explicit retrieval, confirmed memory mutations, document/image operations, Markdown mirroring, and observed refusals or failures.
+- Diagnostic output is deterministic Markdown, requires no additional model calls, and never turns raw chat into a memory corpus.
+- Profile/session-isolated, bounded, escaped turn-local traces; no collection while disabled, no repeated forgotten content, and no model reload when toggling diagnostics.
+- Expanded credential-header screening and re-screened legacy excerpts before displaying diagnostics. Duplicate image results and zero-chunk imports retain their uncertainty instead of claiming a new write.
+- Connected exclusive memory-provider discovery to Hermes' native lifecycle hooks without modifying Hermes core. Added real-loader regression coverage and an isolated live-agent smoke test.
+
+
 ## 1.5.0
 
 ### Memory safety

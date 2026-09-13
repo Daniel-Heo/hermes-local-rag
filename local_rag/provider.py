@@ -5,12 +5,14 @@ import contextvars
 import json
 import sqlite3
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from agent.memory_provider import MemoryProvider
 
 from .config import LocalRagConfig
+from .debug import DebugTurns
 from .database import canonical_database_path
 from .policy import IngestDecision, classify_text, memory_item_properties, validate_memory_item
 from .service import LocalRagService
@@ -47,6 +49,8 @@ class LocalRagProvider(MemoryProvider):
         )
         self._write_enabled = True
         self._config = LocalRagConfig()
+        self._debug = DebugTurns()
+        self._debug_sessions: dict[str, str] = {}
 
     @property
     def name(self) -> str:
@@ -88,19 +92,29 @@ class LocalRagProvider(MemoryProvider):
                 "default": False,
                 "choices": [True, False],
             },
+            {
+                "key": "debug_enabled",
+                "description": "Append compact Local RAG diagnostics to chat responses (off by default)",
+                "default": False,
+                "choices": [True, False],
+            },
         ]
 
     def save_config(self, values: dict[str, Any], hermes_home: str) -> None:
         LocalRagConfig.from_values(values).save(hermes_home)
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        hermes_home = Path(kwargs["hermes_home"])
+        hermes_home = Path(kwargs["hermes_home"]).expanduser().resolve()
         self._hermes_home = hermes_home
         self._config = LocalRagConfig.load(hermes_home)
         identity = str(kwargs.get("agent_identity") or "default")
         user_id = str(kwargs.get("user_id") or "local")
         self._namespace = f"{identity}:{user_id}"
         self._session_id = session_id
+        self._debug_sessions[session_id] = self._namespace
+        if len(self._debug_sessions) > 64:
+            # Session identifiers are opaque; this map is only routing state.
+            self._debug_sessions.pop(next(iter(self._debug_sessions)))
         self._active_session.set(session_id)
         self._write_enabled = kwargs.get("agent_context", "primary") == "primary"
         if self._embedder is None:
@@ -122,6 +136,12 @@ class LocalRagProvider(MemoryProvider):
         self._store.prune(self._namespace)
         if self._config.episodic_ttl_days is None and self._config.summary_ttl_days is None:
             self._store.clear_expirations(self._namespace)
+        try:
+            from .debug_hooks import attach
+            attach(self)
+        except ImportError:
+            # Standalone storage and minimal Hermes installations remain usable.
+            pass
 
     def system_prompt_block(self) -> str:
         return (
@@ -145,6 +165,7 @@ class LocalRagProvider(MemoryProvider):
             if not self._service or not query.strip():
                 return ""
             active_session_id = session_id or self._session_id
+            self._reload_config()
             self._session_id = active_session_id
             self._active_session.set(active_session_id)
             self._refresh_runtime_scope(active_session_id)
@@ -156,7 +177,41 @@ class LocalRagProvider(MemoryProvider):
                 text += "\n<local_image_recall>" + _IMAGE_RECALL_GUIDANCE + "\n" + json.dumps(images, ensure_ascii=False)[:6000] + "\n</local_image_recall>"
             if self._retrieval_warnings:
                 text += "\nLocal RAG degraded: " + "; ".join(self._retrieval_warnings)
+            self._debug.recall(self._debug_key(active_session_id), text)
+            for warning in self._retrieval_warnings:
+                self._debug.failure(self._debug_key(self._session_id), f"Сбой предвыборки: {warning}", attempted_write=False)
             return text
+
+    def on_turn_start(self, turn_number: int, message: str, **kwargs: Any) -> None:
+        """Start a fresh bounded record; no user message is retained."""
+        with self._scope_lock:
+            self._reload_config()
+            key = self._debug_key(self._session_id)
+            self._debug.append(key, "", enabled=False)
+            if self._config.debug_enabled:
+                self._debug.start(key)
+
+    def transform_output(self, response_text: str, *, session_id: str = "", **kwargs: Any) -> str | None:
+        with self._scope_lock:
+            self._reload_config()
+            output = self._debug.append(self._debug_key(session_id or self._session_id), response_text, enabled=self._config.debug_enabled)
+            return output if output != response_text else None
+
+    def _reload_config(self) -> None:
+        if self._hermes_home:
+            try:
+                enabled = LocalRagConfig.load(self._hermes_home).debug_enabled
+            except (OSError, ValueError, TypeError):
+                enabled = False
+            # A diagnostic toggle must never hot-swap model/index settings.
+            self._config = replace(self._config, debug_enabled=enabled)
+
+    def clear_debug_turn(self, session_id: str) -> None:
+        with self._scope_lock:
+            self._debug.append(self._debug_key(session_id), "", enabled=False)
+
+    def _debug_key(self, session_id: str) -> str:
+        return f"{self._debug_sessions.get(session_id, self._namespace)}\0{session_id}"
 
     def _refresh_runtime_scope(self, session_id: str) -> None:
         if not self._hermes_home or not self._service:
@@ -232,10 +287,11 @@ class LocalRagProvider(MemoryProvider):
         return None
 
     def on_session_end(self, messages: list[dict[str, Any]], **kwargs: Any) -> None:
-        return None
+        self.clear_debug_turn(self._session_id)
 
     def on_session_switch(self, new_session_id: str, **kwargs: Any) -> None:
         with self._scope_lock:
+            self.clear_debug_turn(self._session_id)
             self._session_id = new_session_id
             self._active_session.set(new_session_id)
             if self._uses_canonical_state:
@@ -248,20 +304,28 @@ class LocalRagProvider(MemoryProvider):
         if not self._write_enabled or not self._store:
             return
         source = f"builtin:{target}"
+        key = self._debug_key(self._active_session.get() or self._session_id)
         old_text = str((metadata or {}).get("old_text") or "")
         if action in {"remove", "replace"}:
-            self._store.delete_source_containing(self._namespace, source, old_text)
+            removed = self._store.delete_source_containing(self._namespace, source, old_text)
+            if removed:
+                self._debug.forgotten(key, removed, kind="записей зеркала Markdown удалено:")
         if action == "remove":
             return
         if action not in {"add", "replace"}:
             return
         if classify_text(content) is not IngestDecision.INDEX:
+            self._debug.failure(key, "Зеркало Markdown отклонено фильтром безопасности")
             return
-        self._store.add(
+        stored = self._store.add(
             self._namespace, content, self._embedder.embed_document(content),
             source=source, kind="durable", importance=1.0,
             metadata=metadata,
         )
+        if stored:
+            self._debug.change(key, content, "Markdown", action="Зеркало Markdown сохранено")
+        else:
+            self._debug.failure(key, "Зеркало Markdown не добавлено: дубликат или ограничение")
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         def schema(name: str, description: str, properties: dict | None = None, required: list[str] | None = None, *, strict: bool = False) -> dict:
@@ -314,12 +378,45 @@ class LocalRagProvider(MemoryProvider):
             self._refresh_runtime_scope(active_session_id)
             if self._service:
                 self._service.session_id = active_session_id
-            return self._handle_tool_call_locked(
+            result = self._handle_tool_call_locked(
                 tool_name,
                 args,
                 active_session_id=active_session_id,
                 **kwargs,
             )
+            if self._config.debug_enabled:
+                self._trace_other_tool(tool_name, args, json.loads(result), self._debug_key(active_session_id))
+            return result
+
+    def _trace_other_tool(self, name: str, args: dict, result: dict, key: str) -> None:
+        if name in {"local_rag_search", "local_rag_search_images"}:
+            if "results" in result:
+                self._debug.search(key, result["results"])
+            for warning in result.get("warnings", []):
+                self._debug.failure(key, warning, attempted_write=False)
+        elif name == "local_rag_index_file" and "chunks" in result:
+            if result["chunks"]:
+                self._debug.change(key, f"фрагментов: {result['chunks']}", "project", action="Проиндексировано")
+            else:
+                self._debug.observation(key, "Индексирование файла завершилось с нулём фрагментов; изменение памяти не определено")
+        elif name == "local_rag_index_image":
+            if "id" in result:
+                self._debug.observation(key, f"Получен результат изображения #{result['id']}; создание или существование записи не определено")
+            elif result.get("decision") == "skip":
+                self._debug.failure(key, "Изображение: агент явно выбрал не сохранять")
+        elif name in {"local_rag_approve", "local_rag_reject"}:
+            action, field = ("Кандидат принят", "promoted") if name.endswith("approve") else ("Кандидат отклонён", "rejected")
+            if result.get(field):
+                self._debug.change(key, f"кандидат #{args['id']}", "очередь проверки", action=action)
+            elif field in result:
+                self._debug.failure(key, "Кандидат не изменён")
+        elif name == "local_rag_forget_image" and "removed" in result:
+            if result["removed"]:
+                self._debug.forgotten(key, args["id"], kind="изображение")
+            else:
+                self._debug.failure(key, "Изображение не удалено: доступная запись не найдена")
+        elif name == "local_rag_prune" and result.get("removed"):
+            self._debug.forgotten(key, result['removed'], kind="истёкших записей удалено:")
 
     def _handle_tool_call_locked(
         self,
@@ -329,11 +426,14 @@ class LocalRagProvider(MemoryProvider):
         active_session_id: str,
         **kwargs: Any,
     ) -> str:
+        debug_key = self._debug_key(active_session_id)
         if not self._store or not self._service or not self._embedder:
+            self._debug.failure(debug_key, "Local RAG не инициализирован")
             return json.dumps({"error": "Local RAG is not initialized"})
         try:
             if tool_name == "local_rag_remember":
                 if not self._write_enabled:
+                    self._debug.failure(debug_key, "запись запрещена для этого контекста агента")
                     return json.dumps({"error": "Local RAG writes are disabled in this agent context"})
                 item = validate_memory_item(args)
                 text, subject, durability = item["text"], item["subject"], item["durability"]
@@ -367,19 +467,41 @@ class LocalRagProvider(MemoryProvider):
                     },
                     dedupe_key=f"memory_item\0{scope}\0{scope_identity}\0{normalized_text}",
                 )
+                if stored:
+                    self._debug.change(debug_key, text, scope)
+                else:
+                    self._debug.failure(debug_key, "Не сохранено: дубликат или ограничение записи; точная причина не сообщена")
                 return json.dumps({"stored": stored})
             if tool_name == "local_rag_update":
                 if not self._write_enabled:
+                    self._debug.failure(debug_key, "запись запрещена для этого контекста агента")
                     return json.dumps({"error": "Local RAG writes are disabled in this agent context"})
                 if args.keys() - {"id", "expected_text", "new_text", "subject", "durability", "importance", "confidence", "tags"}:
                     raise ValueError("Unknown atomic-update fields")
+                if type(args.get("id")) is not int or not 1 <= args["id"] <= 2**63 - 1:
+                    raise ValueError("Memory ID must be an integer from 1 to 9223372036854775807")
+                scope = "неизвестно"
+                snapshot = self._store.memory_item_for_update(
+                    self._namespace, args["id"], project=self._project, session_id=active_session_id,
+                ) if self._config.debug_enabled else None
+                if snapshot:
+                    try:
+                        scope = str(json.loads(snapshot.get("metadata_json") or "{}").get("scope") or scope)
+                    except (TypeError, ValueError):
+                        pass
                 try:
                     result = self._service.update_memory_item(
                         args["id"], expected_text=args["expected_text"], new_text=args["new_text"],
                         **{key: value for key, value in args.items() if key not in {"id", "expected_text", "new_text"}},
                     )
                 except (RuntimeError, OSError, sqlite3.Error):
+                    self._debug.failure(debug_key, "Сбой атомарного обновления; изменение не сохранено")
                     return json.dumps({"error": "Atomic memory update failed; no change was saved"})
+                if result.get("updated"):
+                    self._debug.change(debug_key, args.get("new_text", ""), scope, action="Исправлено")
+                else:
+                    reasons = {"conflict": "конфликт версии", "unavailable": "запись недоступна", "blocked": "фильтр безопасности"}
+                    self._debug.failure(debug_key, f"Исправление отклонено: {reasons.get(str(result.get('reason')), 'изменение не подтверждено')}")
                 return json.dumps(result)
             if tool_name == "local_rag_search":
                 results = self._unified_search(str(args.get("query") or ""), limit=max(1, min(20, int(args.get("limit", 5)))))
@@ -388,16 +510,23 @@ class LocalRagProvider(MemoryProvider):
                 return json.dumps({"entries": self._store.count(self._namespace), "images": self._images.count(self._namespace) if self._images else 0, "pending_review": len(self._store.list_candidates(self._namespace))})
             if tool_name == "local_rag_forget":
                 if not self._write_enabled:
+                    self._debug.failure(debug_key, "удаление запрещено для этого контекста агента")
                     return json.dumps({"error": "Local RAG writes are disabled in this agent context"})
                 if args.keys() - {"id"}:
                     raise ValueError("Unknown forget fields")
                 if type(args["id"]) is not int or not 1 <= args["id"] <= 2**63 - 1:
                     raise ValueError("Memory ID must be an integer from 1 to 9223372036854775807")
                 try:
-                    return json.dumps({"removed": self._store.delete(
+                    removed = self._store.delete(
                         self._namespace, args["id"], project=self._project, session_id=active_session_id,
-                    )})
+                    )
+                    if removed:
+                        self._debug.forgotten(debug_key, args["id"])
+                    else:
+                        self._debug.failure(debug_key, "удаление: доступная запись не найдена")
+                    return json.dumps({"removed": removed})
                 except sqlite3.Error:
+                    self._debug.failure(debug_key, "Сбой удаления; изменение не подтверждено")
                     return json.dumps({"error": "Memory deletion failed"})
             if tool_name == "local_rag_review":
                 return json.dumps({"candidates": self._store.list_candidates(self._namespace)}, ensure_ascii=False)
@@ -434,6 +563,8 @@ class LocalRagProvider(MemoryProvider):
             if tool_name == "local_rag_prune":
                 return json.dumps({"removed": self._store.prune(self._namespace)})
         except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+            label = "Отклонено: недопустимые аргументы" if isinstance(exc, (KeyError, TypeError, ValueError)) else "Сбой операции памяти"
+            self._debug.failure(debug_key, label, attempted_write=tool_name not in {"local_rag_search", "local_rag_search_images", "local_rag_status", "local_rag_review"})
             return json.dumps({"error": str(exc)})
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -484,6 +615,8 @@ class LocalRagProvider(MemoryProvider):
         return []
 
     def shutdown(self) -> None:
+        self._debug = DebugTurns()
+        self._debug_sessions.clear()
         if self._images:
             self._images.close()
             self._images = None

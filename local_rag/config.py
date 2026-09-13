@@ -12,6 +12,7 @@ class LocalRagConfig:
     episodic_ttl_days: float | None = None
     summary_ttl_days: float | None = None
     visual_enabled: bool = False
+    debug_enabled: bool = False
 
     @classmethod
     def load(cls, hermes_home: str | Path) -> "LocalRagConfig":
@@ -24,6 +25,7 @@ class LocalRagConfig:
             episodic_ttl_days=_ttl_value(raw.get("episodic_ttl_days"), "episodic_ttl_days"),
             summary_ttl_days=_ttl_value(raw.get("summary_ttl_days"), "summary_ttl_days"),
             visual_enabled=_boolean(raw.get("visual_enabled", False), "visual_enabled"),
+            debug_enabled=_boolean(raw.get("debug_enabled", False), "debug_enabled"),
         )
 
     @classmethod
@@ -33,6 +35,7 @@ class LocalRagConfig:
             episodic_ttl_days=_ttl_value(values.get("episodic_ttl_days"), "episodic_ttl_days"),
             summary_ttl_days=_ttl_value(values.get("summary_ttl_days"), "summary_ttl_days"),
             visual_enabled=_boolean(values.get("visual_enabled", False), "visual_enabled"),
+            debug_enabled=_boolean(values.get("debug_enabled", False), "debug_enabled"),
         )
 
     def save(self, hermes_home: str | Path) -> Path:
@@ -47,6 +50,7 @@ class LocalRagConfig:
                     "episodic_ttl_days": self.episodic_ttl_days,
                     "summary_ttl_days": self.summary_ttl_days,
                     "visual_enabled": self.visual_enabled,
+                    "debug_enabled": self.debug_enabled,
                 },
                 indent=2,
             )

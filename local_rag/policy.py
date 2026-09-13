@@ -18,6 +18,10 @@ _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"\b(?:ghp|github_pat|xox[baprs]|AKIA)[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b"),
+    # Headers are frequently copied from HTTP logs.  Collapse whitespace below
+    # so a folded `Authorization:\nBearer ...` header is covered too.
+    re.compile(r"(?i)\b(?:proxy-)?authorization\s*:\s*(?:basic|bearer|token)\s+\S+"),
+    re.compile(r"(?i)\bx-(?:api[-_]?key|auth(?:entication)?)\s*:\s*\S+"),
 )
 
 _INJECTION_PATTERNS = (

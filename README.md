@@ -1,6 +1,6 @@
 # Hermes Local RAG
 
-> **1.5.0:** atomic memory corrections, scoped deletion, and stronger retrieval/evidence guidance.
+> **1.6.0:** optional in-chat memory diagnostics, controlled entirely by the Local RAG plugin.
 > Read [CHANGELOG.md](CHANGELOG.md) for changes and limitations, and
 > [UPGRADE.md](UPGRADE.md) for the shared-inference and curated-image migration introduced in 1.4.0.
 > See the [synthetic benchmark and its limitations](evaluation/README.md).
@@ -32,7 +32,7 @@ For packaged-provider discovery, install it into the same Python environment tha
 > Upgrading from 1.3.2 or older: stop every Hermes Desktop and gateway process first. Version 1.4.0 performs a one-time, integrity-checked migration from `memory.sqlite` / `visual.sqlite` to backup-safe `.db` files and removes the legacy files after success.
 
 ```bash
-python -m pip install hermes-local-rag==1.5.0
+python -m pip install hermes-local-rag==1.6.0
 hermes config set memory.provider local_rag
 ```
 
@@ -90,11 +90,18 @@ Then restart the gateway, or start a new Desktop session.
 {
   "embedding_dimensions": 512,
   "episodic_ttl_days": null,
-  "summary_ttl_days": null
+  "summary_ttl_days": null,
+  "debug_enabled": false
 }
 ```
 
 `null` means infinite retention. Changing `embedding_dimensions` requires explicit reindexing; startup fails loudly rather than mixing incompatible vectors.
+
+`debug_enabled` is a **Local RAG plugin setting**, off by default. Enable **Append Local RAG diagnostics to chat responses** in the plugin's settings and save configuration. An already-running provider picks up this flag on the next turn without reloading models.
+
+The native final-output hook adds a compact Russian Markdown footer: the provider's prefetch payload, explicit search results returned to the agent, confirmed saves/corrections/deletions, image/document operations, Markdown mirroring, and observed rejections or failures. Retrieval does not prove that the model used a fact or inspected image pixels. A missing save is not labelled a deliberate rejection; an ambiguous storage refusal remains ambiguous.
+
+No extra LLM runs, application changes, transcript indexing, or separate diagnostic log are involved. The bounded in-memory trace is cleared on completion, session end/switch, or shutdown. **The footer exposes memory excerpts in the current chat and may be retained by that chat's normal history.** The flag applies to this Hermes profile; leave it off for chats where those excerpts should not be shown. Another plugin's first-winning output transform can suppress the footer; interrupted turns may not have a final footer.
 
 ## Backfill
 

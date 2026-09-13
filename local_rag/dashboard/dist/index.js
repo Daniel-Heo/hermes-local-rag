@@ -43,6 +43,7 @@
     const [dimensions, setDimensions] = useState("512");
     const [retention, setRetention] = useState("forever");
     const [days, setDays] = useState("90");
+    const [debugEnabled, setDebugEnabled] = useState(false);
     const [backfillPlan, setBackfillPlan] = useState(null);
     const [acceptedBackfill, setAcceptedBackfill] = useState([]);
 
@@ -60,6 +61,7 @@
           if (cfg.episodic_ttl_days == null && cfg.summary_ttl_days == null) setRetention("forever");
           else { setRetention("custom"); setDays(String(cfg.episodic_ttl_days || cfg.summary_ttl_days || 90)); }
           if (cfg.visual_enabled) setMode("visual");
+          setDebugEnabled(Boolean(cfg.debug_enabled));
         }
         return data;
       }).catch(function (e) { setMessage({ ok: false, text: "Could not load setup status: " + errorText(e) }); });
@@ -99,7 +101,7 @@
 
     function saveConfiguration() {
       const ttl = retention === "custom" ? Number(days) : null;
-      const payload = { embedding_dimensions: Number(dimensions), episodic_ttl_days: ttl, summary_ttl_days: ttl, visual_enabled: mode === "visual" };
+      const payload = { embedding_dimensions: Number(dimensions), episodic_ttl_days: ttl, summary_ttl_days: ttl, visual_enabled: mode === "visual", debug_enabled: debugEnabled };
       return action("Save configuration", "/setup/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     }
 
@@ -246,6 +248,8 @@
                 ),
                 retention === "custom" ? h(Input, { type: "number", min: "1", value: days, onChange: function (e) { setDays(e.target.value); }, "aria-label": "Retention days", placeholder: "Days" }) : null
               ),
+              h("label", { className: "local-rag-consent" }, h("input", { type: "checkbox", checked: debugEnabled, onChange: function (e) { setDebugEnabled(e.target.checked); } }), h("span", null, "Append Local RAG diagnostics to chat responses")),
+              h("p", { className: "text-xs text-muted-foreground" }, "Off by default. Shows memory excerpts in this profile's chats; normal chat history may retain them. No extra model calls."),
               h("p", { className: "text-xs text-muted-foreground" }, "Changing dimensions after indexing requires reindexing; incompatible vectors are not mixed."),
               h(Button, { onClick: saveConfiguration, disabled: !!busy || (retention === "custom" && !(Number(days) > 0)) }, "Save configuration")
             )

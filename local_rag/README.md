@@ -27,6 +27,8 @@ After installing the plugin from **Hermes Dashboard → Plugins**, open the **Lo
 
 The token is passed directly to `huggingface_hub.login`, is never placed in a subprocess argument, response, config file, or setup log, and remains governed by Hugging Face's credential storage. Gemma Terms must still be accepted by the user in the browser.
 
+The plugin's **Append Local RAG diagnostics to chat responses** checkbox is off by default. It adds a compact Russian Markdown footer through Hermes' `transform_llm_output` hook: provider prefetch, explicit search results, confirmed memory changes, and observed refusals/failures. Retrieval is not proof of model use or pixel inspection. There are no extra LLM calls or transcript indexing. The trace is bounded and cleared after the turn; visible excerpts can still remain in normal chat history. The setting applies to this profile and reloads next turn without restarting models. Other output-transform plugins may take precedence.
+
 ## Ingestion
 
 - Raw user turns and session summaries are not automatically ingested.

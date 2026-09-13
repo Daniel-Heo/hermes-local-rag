@@ -173,7 +173,7 @@ def _status() -> dict[str, Any]:
         "hermes_found": bool(hermes), "python_found": _python().is_file(),
         "dependencies_installed": deps, "hf": auth, "text_model_downloaded": text,
         "visual_model_downloaded": visual, "provider": provider, "active": provider == "local_rag",
-        "config": {"embedding_dimensions": config.get("embedding_dimensions", 512), "episodic_ttl_days": config.get("episodic_ttl_days"), "summary_ttl_days": config.get("summary_ttl_days"), "visual_enabled": config.get("visual_enabled", False)},
+        "config": {"embedding_dimensions": config.get("embedding_dimensions", 512), "episodic_ttl_days": config.get("episodic_ttl_days"), "summary_ttl_days": config.get("summary_ttl_days"), "visual_enabled": config.get("visual_enabled", False), "debug_enabled": config.get("debug_enabled", False)},
         "database": database, "disk": {"free_bytes": shutil.disk_usage(home).free},
     }
 
@@ -196,6 +196,7 @@ class SetupConfigRequest(BaseModel):
     episodic_ttl_days: float | None = None
     summary_ttl_days: float | None = None
     visual_enabled: bool = False
+    debug_enabled: bool = False
 
 class ConfirmRequest(BaseModel):
     confirm: bool = False

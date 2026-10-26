@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Iterator
 
@@ -82,7 +82,7 @@ def canonical_database_path(directory: Path, name: str) -> Path:
         if not legacy.exists():
             old_schema_backup = directory / "memory.pre-v2.sqlite"
             if name == "memory" and old_schema_backup.exists() and target.exists():
-                with sqlite3.connect(f"{target.resolve().as_uri()}?mode=ro", uri=True) as current:
+                with closing(sqlite3.connect(f"{target.resolve().as_uri()}?mode=ro", uri=True)) as current:
                     _require_integrity(current, target)
                 _unlink_database(old_schema_backup)
                 _fsync_directory(directory)
@@ -104,7 +104,8 @@ def canonical_database_path(directory: Path, name: str) -> Path:
             source.close()
             source = None
 
-            with temporary.open("rb") as database_file:
+            # Windows os.fsync (FlushFileBuffers) needs a writable handle; POSIX accepts either.
+            with temporary.open("r+b") as database_file:
                 os.fsync(database_file.fileno())
             for sidecar in _sidecars(target):
                 sidecar.unlink(missing_ok=True)
@@ -113,7 +114,8 @@ def canonical_database_path(directory: Path, name: str) -> Path:
             target.chmod(0o600)
             _fsync_directory(directory)
 
-            with sqlite3.connect(f"{target.resolve().as_uri()}?mode=ro", uri=True) as migrated:
+            # closing(): an open handle blocks a later os.replace/unlink on Windows.
+            with closing(sqlite3.connect(f"{target.resolve().as_uri()}?mode=ro", uri=True)) as migrated:
                 _require_integrity(migrated, target)
             _unlink_database(legacy)
             if name == "memory":

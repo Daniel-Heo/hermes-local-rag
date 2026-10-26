@@ -35,7 +35,7 @@ def _private_directory(path):
     path = Path(path)
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
     info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != _wc.getuid():
+    if not stat.S_ISDIR(info.st_mode) or _wc.is_link_stat(info) or info.st_uid != _wc.getuid():
         raise PermissionError('Inference directory must be owned by this user, not a symlink')
     path.chmod(0o700)
     return path
@@ -103,9 +103,10 @@ class InferenceServer:
 
     def start(self):
         _private_directory(self.directory)
-        if len(os.fsencode(self.socket_path)) >= 104:
+        # The TCP transport writes a port file, so the Unix socket limit does not apply.
+        if _wc.USE_AF_UNIX and len(os.fsencode(self.socket_path)) >= 104:
             raise ValueError('Profile path too long for a Unix socket (104-byte limit)')
-        fd = os.open(self.directory / 'owner.lock', os.O_CREAT | os.O_RDWR | _wc.O_NOFOLLOW, 0o600)
+        fd = _wc.open_nofollow(self.directory / 'owner.lock', os.O_CREAT | os.O_RDWR, 0o600)
         self.lock = os.fdopen(fd, 'w')
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -243,8 +244,9 @@ class InferenceServer:
             self.lock = None
 
 
-def _private_file(path):
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | _wc.O_NOFOLLOW | _wc.O_NONBLOCK, 0o600)
+def _private_file(path, *, unshared=False):
+    fd = (_wc.open_unshared(path) if unshared
+          else _wc.open_nofollow(path, os.O_CREAT | os.O_RDWR | _wc.O_NONBLOCK, 0o600))
     info = os.fstat(fd)
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != _wc.getuid()
             or _wc.insecure_mode(info.st_mode) or info.st_nlink != 1):
@@ -322,7 +324,16 @@ class InferenceClient:
             # Inherit a separate flock across exec. The child owns this guard
             # even before Python imports/main/owner.lock, and even if its starter
             # exits or times out. A timestamp or PID cannot provide that handoff.
-            with _private_file(self.directory / 'launch.lock') as launch:
+            if _wc.IS_WINDOWS:
+                # Windows locks cannot cross process creation; the inherited
+                # no-sharing handle is the guard there (see open_unshared).
+                try:
+                    launch = _private_file(self.directory / 'launch.lock', unshared=True)
+                except BlockingIOError:
+                    raise RuntimeError('Inference launch in progress; service is not ready') from None
+            else:
+                launch = _private_file(self.directory / 'launch.lock')
+            with launch:
                 try:
                     fcntl.flock(launch, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
@@ -370,9 +381,10 @@ class InferenceClient:
 
     def _request(self, op, value='', *, priority='interactive', socket_timeout=None, **kwargs):
         info = self.directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != _wc.getuid() or _wc.insecure_mode(info.st_mode):
+        if (not stat.S_ISDIR(info.st_mode) or _wc.is_link_stat(info) or info.st_uid != _wc.getuid()
+                or _wc.insecure_mode(info.st_mode)):
             raise PermissionError('Insecure inference directory')
-        fd = os.open(self.directory / 'token', os.O_RDONLY | _wc.O_NOFOLLOW | _wc.O_NONBLOCK)
+        fd = _wc.open_nofollow(self.directory / 'token', os.O_RDONLY | _wc.O_NONBLOCK)
         with os.fdopen(fd) as handle:
             info = os.fstat(handle.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != _wc.getuid()
@@ -409,17 +421,20 @@ def main():
     os.environ.setdefault("HERMES_HOME", str(Path(args.home).expanduser()))
     server = InferenceServer(Path(args.home).expanduser())
     stopped = threading.Event()
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    # Windows delivers a graceful stop as CTRL_BREAK_EVENT (SIGBREAK).
+    for sig in (signal.SIGINT, signal.SIGTERM, *_wc.stop_signals()):
         signal.signal(sig, lambda *_: stopped.set())
     try:
         server.start()
     finally:
         # Only hand off after start has acquired the lifetime owner.lock.
         if args.launch_fd is not None:
-            os.close(args.launch_fd)
+            _wc.close_launch_fd(args.launch_fd)
     print(json.dumps({'ready': str(server.socket_path), 'pid': os.getpid()}), flush=True)
     try:
-        stopped.wait()
+        # An untimed wait cannot be interrupted by signals on Windows.
+        while not stopped.wait(None if not _wc.IS_WINDOWS else .5):
+            pass
     finally:
         server.close()
 

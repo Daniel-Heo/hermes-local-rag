@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import json
 import sqlite3
@@ -446,8 +447,15 @@ def test_plugin_registers_structured_selective_backfill_cli(tmp_path: Path, monk
     python = tmp_path / "hermes-agent" / "venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("python", encoding="utf-8")
+    if os.name == "nt":
+        # Windows resolves the managed venv's hermes.exe; keep the real HERMES_PYTHON out of the test.
+        monkeypatch.delenv("HERMES_PYTHON", raising=False)
+        scripts = tmp_path / "hermes-agent" / "venv" / "Scripts"
+        scripts.mkdir()
+        for name in ("python.exe", "hermes.exe"):
+            (scripts / name).write_text("managed", encoding="utf-8")
     def fake_export(command, **_kwargs):
-        target = Path(command[4])
+        target = Path(command[command.index("export") + 1])
         export_modes.append(target.stat().st_mode & 0o777)
         target.write_text(export.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(cli.subprocess, "run", fake_export)
@@ -458,7 +466,8 @@ def test_plugin_registers_structured_selective_backfill_cli(tmp_path: Path, monk
 
     assert isinstance(ctx.provider, LocalRagProvider)
     assert ctx.command is None
-    assert export_modes == [0o600]
+    # Windows has no POSIX mode bits; the export stays in the private profile directory.
+    assert export_modes == [0o600] if os.name != "nt" else len(export_modes) == 1
     assert not list((tmp_path / "local-rag").glob(".backfill-export-*.jsonl"))
     assert json.loads(plan.read_text())["items"][0]["accepted"] is False
     call = ctx.llm.calls[0]

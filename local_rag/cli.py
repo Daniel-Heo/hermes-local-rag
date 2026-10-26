@@ -1,6 +1,6 @@
 # local_rag windows patch v1
 from __future__ import annotations
-from ._wincompat import default_hermes_home as _wc_default_hermes_home, fchmod as _wc_fchmod, getuid as _wc_getuid, O_NOFOLLOW as _WC_O_NOFOLLOW, O_NONBLOCK as _WC_O_NONBLOCK
+from ._wincompat import default_hermes_home as _wc_default_hermes_home, fchmod as _wc_fchmod
 
 import argparse
 import json

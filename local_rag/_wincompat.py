@@ -7,14 +7,18 @@ On native Windows:
     so lock files can still be read and written normally.
   - os.getuid() does not exist; os.stat() reports st_uid == 0, so 0 is used.
   - POSIX permission bits are not meaningful, so the 0o077 check is skipped.
+  - O_NOFOLLOW does not exist; open_nofollow() rejects symlinks and junctions.
   - AF_UNIX is replaced by a 127.0.0.1 TCP listener. The port is written to
     the old socket path. Every request is still authenticated by the
     existing random token file, which stays inside the user's profile.
 """
 from __future__ import annotations
 
+import errno
 import os
+import signal
 import socket
+import stat
 import sys
 import time
 from pathlib import Path
@@ -38,6 +42,48 @@ def insecure_mode(st_mode: int) -> bool:
 def fchmod(fd: int, mode: int) -> None:
     if not IS_WINDOWS and hasattr(os, "fchmod"):
         os.fchmod(fd, mode)
+
+
+def _is_link(info: os.stat_result) -> bool:
+    # Symlinks and junctions are both reparse points on Windows.
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def is_link_stat(info: os.stat_result) -> bool:
+    """For lstat() results: S_ISLNK, plus junctions (which lstat reports as S_ISDIR) on Windows."""
+    return _is_link(info)
+
+
+def is_link(path) -> bool:
+    """Path.is_symlink(); on Windows junctions (and any reparse point) count too."""
+    if not IS_WINDOWS:
+        return Path(path).is_symlink()
+    try:
+        return _is_link(os.lstat(path))
+    except (OSError, ValueError):
+        return False
+
+
+def open_nofollow(path, flags: int, mode: int = 0o777) -> int:
+    """os.open with O_NOFOLLOW; Windows has no O_NOFOLLOW, so links are rejected explicitly."""
+    if not IS_WINDOWS:
+        return os.open(path, flags | O_NOFOLLOW, mode)
+    try:
+        if _is_link(os.lstat(path)):
+            raise OSError(errno.ELOOP, "Refusing to follow a link", str(path))
+    except FileNotFoundError:
+        pass
+    fd = os.open(path, flags, mode)
+    try:
+        # Reject a link swapped in between the check and the open.
+        after, opened = os.lstat(path), os.fstat(fd)
+        if _is_link(after) or (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError(errno.ELOOP, "Refusing to follow a link", str(path))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 if IS_WINDOWS:
@@ -154,13 +200,75 @@ def inference_python() -> str:
     return sys.executable
 
 
+def stop_signals() -> tuple:
+    """Extra graceful-stop signals: SIGBREAK (CTRL_BREAK_EVENT) on Windows."""
+    return (signal.SIGBREAK,) if IS_WINDOWS else ()
+
+
+def open_unshared(path) -> int:
+    """Windows-only launch guard: open with share mode 0, links rejected.
+
+    A byte-range lock dies with the locking process's handle, so it cannot be
+    handed across process creation. A no-sharing open can: the file object
+    stays exclusive while any inherited handle to it is open, so every other
+    open fails until the daemon (or whatever inherited it) closes it or exits.
+    Raises BlockingIOError while another holder exists.
+    """
+    import _winapi
+    import msvcrt
+    try:
+        if _is_link(os.lstat(path)):
+            raise OSError(errno.ELOOP, "Refusing to follow a link", str(path))
+    except FileNotFoundError:
+        pass
+    try:
+        handle = _winapi.CreateFile(str(path), _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, 0,
+                                    _OPEN_ALWAYS, _FILE_FLAG_OPEN_REPARSE_POINT, 0)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == _ERROR_SHARING_VIOLATION:
+            raise BlockingIOError(errno.EAGAIN, "Launch guard is held by another process") from None
+        raise
+    fd = msvcrt.open_osfhandle(handle, os.O_RDWR)
+    try:
+        after, opened = os.lstat(path), os.fstat(fd)
+        if _is_link(after) or (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError(errno.ELOOP, "Refusing to follow a link", str(path))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+_OPEN_ALWAYS = 4
+_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_ERROR_SHARING_VIOLATION = 32
+
+
 def launch_fd_args(fd: int) -> list[str]:
-    return [] if IS_WINDOWS else ["--launch-fd", str(fd)]
+    # Windows passes the inherited OS handle value, which is identical in the child.
+    if IS_WINDOWS:
+        import msvcrt
+        return ["--launch-fd", str(msvcrt.get_osfhandle(fd))]
+    return ["--launch-fd", str(fd)]
+
+
+def close_launch_fd(value: int) -> None:
+    if IS_WINDOWS:
+        import _winapi
+        _winapi.CloseHandle(value)
+    else:
+        os.close(value)
 
 
 def detached_popen_kwargs(fd: int) -> dict:
     if IS_WINDOWS:
+        import msvcrt
         import subprocess
         flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        return {"close_fds": True, "creationflags": flags}
+        # Inherit only the launch guard (plus std handles), like pass_fds on POSIX.
+        handle = msvcrt.get_osfhandle(fd)
+        os.set_handle_inheritable(handle, True)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.lpAttributeList = {"handle_list": [handle]}
+        return {"close_fds": True, "creationflags": flags, "startupinfo": startupinfo}
     return {"start_new_session": True, "close_fds": True, "pass_fds": (fd,)}

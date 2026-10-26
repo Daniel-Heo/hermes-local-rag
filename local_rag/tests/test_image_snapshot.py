@@ -1,4 +1,5 @@
 """Deterministic native SQLite snapshot schedules; no model/runtime dependency."""
+import os
 import sqlite3
 from pathlib import Path
 import pytest
@@ -187,7 +188,8 @@ def test_image_maintenance_cli(tmp_path, monkeypatch, capsys, command):
 def test_original_database_and_staging_are_private(tmp_path):
     import stat
     images = store(tmp_path / 'home')
-    assert stat.S_IMODE((images.directory.parent / 'curated-images.db').stat().st_mode) == 0o600
+    if os.name != 'nt':  # Windows has no POSIX mode bits; the profile ACL keeps the database private.
+        assert stat.S_IMODE((images.directory.parent / 'curated-images.db').stat().st_mode) == 0o600
     cache = images.directory.parent / '.cache'
     external = tmp_path / 'outside'
     external.mkdir()

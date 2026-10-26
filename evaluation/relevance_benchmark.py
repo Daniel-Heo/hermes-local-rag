@@ -21,6 +21,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from local_rag import _wincompat as _wc
 from local_rag.inference import InferenceClient
 from local_rag.provider import LocalRagProvider
 from local_rag.service import LocalRagService
@@ -31,7 +32,11 @@ DATA = ROOT / 'evaluation' / 'relevance'
 
 
 def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    data = path.read_bytes()
+    if _wc.IS_WINDOWS:
+        # git autocrlf checks text out with CRLF; hash the LF form that was preregistered.
+        data = data.replace(b'\r\n', b'\n')
+    return hashlib.sha256(data).hexdigest()
 
 
 def dump(path, value):
@@ -214,8 +219,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('phase', choices=['calibrate', 'heldout', 'run'])
     parser.add_argument('--run', type=Path, required=True, help='New artifact directory under evaluation/')
-    parser.add_argument('--service-home', type=Path, default=Path.home() / '.hermes',
-                        help='Home of the existing inference service (default: ~/.hermes)')
+    # Windows installs under %LOCALAPPDATA%\hermes; POSIX keeps ~/.hermes regardless of HERMES_HOME.
+    parser.add_argument('--service-home', type=Path,
+                        default=Path(_wc.default_hermes_home()) if _wc.IS_WINDOWS else Path.home() / '.hermes',
+                        help='Home of the existing inference service (default: ~/.hermes; '
+                             'Windows: HERMES_HOME or %%LOCALAPPDATA%%\\hermes)')
     args = parser.parse_args()
     run = args.run.resolve()
     if not run.is_relative_to((ROOT / 'evaluation').resolve()):

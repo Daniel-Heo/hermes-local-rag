@@ -1,4 +1,5 @@
 """Real daemon lifecycle tests; never load models or touch the user's profile."""
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -10,12 +11,23 @@ import time
 
 import pytest
 
+from local_rag._wincompat import fcntl
 from local_rag.inference import InferenceClient
+from local_rag.tests.test_wincompat import HARD_KILL, pid_alive, read_line, wait_output, wait_pid_exit
+
+IS_WINDOWS = os.name == 'nt'
+no_mode_bits = pytest.mark.skipif(IS_WINDOWS, reason='POSIX permission bits do not exist on Windows; profile privacy comes from the inherited %LOCALAPPDATA% ACL')
 
 
 @pytest.fixture
-def homes():
-    with tempfile.TemporaryDirectory(prefix='rag-life-', dir='/tmp') as root:
+def homes(monkeypatch, tmp_path):
+    if IS_WINDOWS:
+        # Spawned daemons must use this interpreter, never the user's installed Hermes venv.
+        monkeypatch.setenv('HERMES_PYTHON', sys.executable)
+    # /tmp keeps AF_UNIX paths short. Windows uses loopback TCP and pytest's temp root, which
+    # pytest purges itself: the venv launcher of a just-killed daemon may still hold its log.
+    root = nullcontext(str(tmp_path)) if IS_WINDOWS else tempfile.TemporaryDirectory(prefix='rag-life-', dir='/tmp')
+    with root as root:
         paths = [Path(root) / 'a', Path(root) / 'b']
         yield paths
         for home in paths:
@@ -23,7 +35,9 @@ def homes():
                 pid = InferenceClient(home, timeout=.2).request('ping')['pid']
                 os.kill(pid, signal.SIGTERM)
                 deadline = time.monotonic() + 5
-                while (home / 'local-rag/.cache/i.sock').exists() and time.monotonic() < deadline:
+                if IS_WINDOWS:  # TerminateProcess skips cleanup; wait until handles are released.
+                    wait_pid_exit(pid, 5)
+                while not IS_WINDOWS and (home / 'local-rag/.cache/i.sock').exists() and time.monotonic() < deadline:
                     time.sleep(.02)
             except (OSError, RuntimeError, ValueError):
                 pass
@@ -77,7 +91,7 @@ def test_crash_recovers_only_on_next_demand_and_profiles_are_isolated(homes):
     first = demand(homes[0])
     other = demand(homes[1])
     assert first != other
-    os.kill(first, signal.SIGKILL)
+    os.kill(first, HARD_KILL)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
@@ -112,7 +126,9 @@ def test_failed_readiness_is_bounded_and_backoff_prevents_spawn_storm(homes, mon
         assert len(children) == 1
         directory = homes[0] / 'local-rag/.cache'
         for name in ('startup.lock', 'owner.lock', 'inference.log'):
-            assert (directory / name).stat().st_mode & 0o777 == 0o600
+            assert (directory / name).is_file()
+            if not IS_WINDOWS:
+                assert (directory / name).stat().st_mode & 0o777 == 0o600
         assert 'secret input' not in (directory / 'inference.log').read_text()
     finally:
         for child in children:
@@ -144,6 +160,7 @@ def test_failure_backoff_starts_after_readiness_deadline(homes, monkeypatch):
 def test_pending_launch_survives_cooldown_and_concurrent_clients(homes):
     # Each client substitutes only the daemon command: real exec and inherited
     # descriptors still run, but the child never reaches server.start().
+    # On Windows the inherited descriptor is the no-sharing launch.lock handle.
     code = '''
 import json, subprocess, sys
 from pathlib import Path
@@ -180,11 +197,9 @@ finally:
         clients.append(child)
         return child
     try:
-        import select
         first = start()
         assert first.stdout is not None
-        assert select.select([first.stdout], [], [], 5)[0]
-        assert 'deadline' in json.loads(first.stdout.readline())['error']
+        assert 'deadline' in json.loads(read_line(first.stdout, 5))['error']
         launches = homes[0] / 'launches'
         initial = launches.read_text().splitlines()
         assert len(initial) == 1
@@ -193,7 +208,7 @@ finally:
         results = [p.communicate('\n', timeout=5) for p in contenders]
         assert all(p.returncode == 0 for p in contenders), results
         assert launches.read_text().splitlines() == initial
-        os.kill(int(initial[0]), 0)  # No timeout-triggered kill/restart.
+        assert pid_alive(int(initial[0]))  # No timeout-triggered kill/restart.
         first.communicate('\n', timeout=5)
         assert first.returncode == 0
         # Death releases launch ownership; next demand may start a replacement.
@@ -212,7 +227,6 @@ finally:
 
 
 def test_startup_lock_wait_is_bounded(homes):
-    import fcntl
     directory = homes[0] / 'local-rag/.cache'
     directory.mkdir(parents=True, mode=0o700)
     path = directory / 'startup.lock'
@@ -249,7 +263,6 @@ def test_live_unauthorized_service_is_not_replaced(homes):
 
 
 def test_lifetime_owner_lock_blocks_replacement_without_socket(homes):
-    import fcntl
     directory = homes[0] / 'local-rag/.cache'
     directory.mkdir(parents=True, mode=0o700)
     path = directory / 'owner.lock'
@@ -264,11 +277,12 @@ def test_lifetime_owner_lock_blocks_replacement_without_socket(homes):
 def test_insecure_directory_and_symlink_lock_are_not_repaired(homes):
     directory = homes[0] / 'local-rag/.cache'
     directory.mkdir(parents=True, mode=0o755)
-    directory.chmod(0o755)
-    with pytest.raises(PermissionError, match='directory'):
-        InferenceClient(homes[0]).embed_query('probe')
-    assert directory.stat().st_mode & 0o777 == 0o755
-    directory.chmod(0o700)
+    if not IS_WINDOWS:  # Windows has no POSIX mode bits; only the symlink half applies.
+        directory.chmod(0o755)
+        with pytest.raises(PermissionError, match='directory'):
+            InferenceClient(homes[0]).embed_query('probe')
+        assert directory.stat().st_mode & 0o777 == 0o755
+        directory.chmod(0o700)
     target = homes[0] / 'untouched'
     target.write_text('do not overwrite')
     (directory / 'startup.lock').symlink_to(target)
@@ -278,7 +292,7 @@ def test_insecure_directory_and_symlink_lock_are_not_repaired(homes):
     assert not (directory / 'inference.log').exists()
 
 
-@pytest.mark.parametrize('kind', ['hardlink', 'symlink', 'permissions'])
+@pytest.mark.parametrize('kind', ['hardlink', 'symlink', pytest.param('permissions', marks=no_mode_bits)])
 def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind):
     directory = homes[0] / 'local-rag/.cache'
     directory.mkdir(parents=True, mode=0o700)
@@ -300,9 +314,8 @@ def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind)
         [sys.executable, '-m', 'local_rag.inference', '--home', str(homes[0])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     try:
-        import select
         assert child.stdout is not None and child.stderr is not None
-        assert select.select([child.stdout, child.stderr], [], [], 5)[0]
+        wait_output(child, 5)
         assert victim.read_text() == 'keep this secret intact'
         assert victim.stat().st_mode == before.st_mode
         out, err = child.communicate(timeout=5)
@@ -313,6 +326,7 @@ def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind)
         child.wait(timeout=5)
 
 
+@no_mode_bits
 def test_insecure_token_is_not_read_or_repaired(homes):
     demand(homes[0])
     token_path = homes[0] / 'local-rag/.cache/token'

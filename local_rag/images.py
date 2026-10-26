@@ -5,7 +5,7 @@ No attachment listener, temporary attachment store, or conversation ingestion.
 OCR is local Tesseract when installed; absence is reported, never invented.
 """
 from __future__ import annotations
-from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid, O_NOFOLLOW as _WC_O_NOFOLLOW, O_NONBLOCK as _WC_O_NONBLOCK
+from ._wincompat import IS_WINDOWS as _WC_IS_WINDOWS, fchmod as _wc_fchmod, getuid as _wc_getuid, O_NONBLOCK as _WC_O_NONBLOCK, open_nofollow as _wc_open_nofollow, is_link as _wc_is_link
 
 import hashlib
 import json
@@ -90,13 +90,13 @@ class CuratedImages:
     def __init__(self, home, *, text, visual, ocr=local_ocr):
         self.directory = Path(home) / 'local-rag' / 'images'
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if self.directory.is_symlink():
+        if _wc_is_link(self.directory):
             raise ValueError('Managed images directory must not be a symlink')
         self.directory.chmod(0o700)
         self.text, self.visual, self.ocr = text, visual, ocr
         self.lock = threading.RLock()
         database = self.directory.parent / 'curated-images.db'
-        fd = os.open(database, os.O_CREAT | os.O_RDWR | _WC_O_NOFOLLOW, 0o600)
+        fd = _wc_open_nofollow(database, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             _wc_fchmod(fd, 0o600)
         finally:
@@ -152,7 +152,7 @@ class CuratedImages:
     def _private_cache(self):
         cache = self.directory.parent / '.cache'
         cache.mkdir(mode=0o700, exist_ok=True)
-        if cache.is_symlink():
+        if _wc_is_link(cache):
             raise ValueError('Image staging directory must not be a symlink')
         cache.chmod(0o700)
         return cache
@@ -239,14 +239,20 @@ class CuratedImages:
                 if old:
                     self.db.commit()
                     return self._result(old)
-                with tempfile.NamedTemporaryFile(dir=self._private_cache(), suffix=suffix) as snapshot:
-                    snapshot.write(data)
-                    snapshot.flush()
-                    ocr, status, clip, vector = self._derivatives(Path(snapshot.name), description)
+                # Windows cannot reopen a delete-on-close temporary file by name, so delete it explicitly.
+                with tempfile.NamedTemporaryFile(dir=self._private_cache(), suffix=suffix, delete=not _WC_IS_WINDOWS) as snapshot:
+                    try:
+                        snapshot.write(data)
+                        snapshot.flush()
+                        ocr, status, clip, vector = self._derivatives(Path(snapshot.name), description)
+                    finally:
+                        if _WC_IS_WINDOWS:
+                            snapshot.close()
+                            Path(snapshot.name).unlink(missing_ok=True)
                 if not managed.exists():
                     self._atomic_file(managed, data)
                     created_file = True
-                elif managed.is_symlink() or self._read_managed(managed) != data:
+                elif _wc_is_link(managed) or self._read_managed(managed) != data:
                     raise ValueError('Managed image integrity failure')
                 self.db.execute('UPDATE curated_images SET active=0 WHERE namespace=? AND scope=? AND scope_key=? AND version_group=?', (namespace, scope, key, group))
                 cur = self.db.execute('''INSERT INTO curated_images(namespace,hash,filename,scope,scope_key,version_group,description,ocr,ocr_status,reason,clip,text_vector,text_dimensions,created,original)
@@ -312,7 +318,7 @@ class CuratedImages:
     @staticmethod
     def _read_managed(path):
         # Do not follow replacement symlinks or read unbounded replacement files.
-        fd = os.open(path, os.O_RDONLY | _WC_O_NOFOLLOW | _WC_O_NONBLOCK)
+        fd = _wc_open_nofollow(path, os.O_RDONLY | _WC_O_NONBLOCK)
         with os.fdopen(fd, 'rb') as handle:
             import stat
             if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
@@ -378,7 +384,7 @@ class CuratedImages:
     def _reconcile_row(self, row, created):
         path = self.directory / row['filename']
         try:
-            if path.is_symlink():
+            if _wc_is_link(path):
                 self._drop_row(row)
                 return
             data = self._read_managed(path)

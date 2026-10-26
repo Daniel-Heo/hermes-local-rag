@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid
+from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid, open_nofollow as _wc_open_nofollow
 from .database import canonical_database_path
 from .policy import IngestDecision, classify_text
 
@@ -105,14 +105,14 @@ def plan_key(hermes_home: Path, *, create: bool) -> bytes:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() and create:
         try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            descriptor = _wc_open_nofollow(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             pass
         else:
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(secrets.token_bytes(32))
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = _wc_open_nofollow(path, os.O_RDONLY)
     except OSError as exc:
         raise ValueError("Backfill trust key is missing; create a new preview") from exc
     with os.fdopen(descriptor, "rb") as handle:

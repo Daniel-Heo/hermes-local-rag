@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -84,10 +85,12 @@ def test_status_projects_config_and_reports_disk_and_database(client: TestClient
     folder = home / "local-rag"
     folder.mkdir()
     (folder / "config.json").write_text(json.dumps({"embedding_dimensions": 256, "token": "secret", "user_id": "private"}))
-    with sqlite3.connect(folder / "memory.sqlite") as conn:
+    # closing(): an open connection blocks the legacy-database migration on Windows.
+    with closing(sqlite3.connect(folder / "memory.sqlite")) as conn:
         conn.execute("CREATE TABLE memories(id INTEGER PRIMARY KEY)")
         conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO meta VALUES('embedding_dimensions','256')")
+        conn.commit()
     monkeypatch.setattr(api, "_auth_status", lambda: {"available": False, "authenticated": False})
     monkeypatch.setattr(api.shutil, "which", lambda _: None)
     monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 1, "stdout": "", "stderr": ""})())
@@ -110,17 +113,19 @@ def test_config_validates_ttls_and_never_reindexes(client: TestClient) -> None:
     assert json.loads(path.read_text())["embedding_dimensions"] == 768
     assert json.loads(path.read_text())["visual_enabled"] is True
     assert json.loads(path.read_text())["debug_enabled"] is True
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":  # Windows has no POSIX mode bits; the profile ACL keeps config private.
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_dimension_change_with_existing_data_requires_explicit_reindex(client: TestClient) -> None:
     db = Path(api.os.environ["HERMES_HOME"]) / "local-rag" / "memory.sqlite"
     db.parent.mkdir()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn:
         conn.execute("CREATE TABLE memories(id INTEGER PRIMARY KEY)")
         conn.execute("INSERT INTO memories DEFAULT VALUES")
         conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO meta VALUES('embedding_dimensions','512')")
+        conn.commit()
     response = client.post("/setup/config", json={"embedding_dimensions": 256})
     assert response.status_code == 409
     assert "reindex" in response.json()["detail"].lower()
@@ -129,9 +134,10 @@ def test_dimension_change_with_existing_data_requires_explicit_reindex(client: T
 def test_existing_data_without_dimension_metadata_fails_closed(client: TestClient) -> None:
     db = Path(api.os.environ["HERMES_HOME"]) / "local-rag" / "memory.sqlite"
     db.parent.mkdir()
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn:
         conn.execute("CREATE TABLE memories(id INTEGER PRIMARY KEY)")
         conn.execute("INSERT INTO memories DEFAULT VALUES")
+        conn.commit()
     response = client.post("/setup/config", json={"embedding_dimensions": 512})
     assert response.status_code == 409
     assert "repair or reindex" in response.json()["detail"].lower()
@@ -296,6 +302,8 @@ def test_status_probes_fail_safely(client: TestClient, monkeypatch: pytest.Monke
     def fail(*args, **kwargs):
         raise failure
 
+    # Windows platform.system() shells out through subprocess.run; cache it before the probe fails.
+    __import__("platform").system()
     monkeypatch.setattr(api.subprocess, "run", fail)
     status = client.get("/setup/status")
     health = client.post("/health")

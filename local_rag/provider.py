@@ -59,6 +59,13 @@ def _inference_ready() -> bool:
                               capture_output=True, timeout=30, creationflags=flags)
     except (OSError, subprocess.SubprocessError):
         return False
+    if done.returncode != 0 and _wc.IS_WINDOWS:
+        # Without HERMES_PYTHON or the default Hermes venv, inference_python() falls
+        # back to the host runtime, which on Windows usually lacks these packages.
+        import warnings
+        warnings.warn(f"Local RAG inference interpreter {_wc.inference_python()} lacks "
+                      f"{', '.join(_INFERENCE_MODULES)}; set HERMES_PYTHON to the Hermes venv python.exe",
+                      RuntimeWarning, stacklevel=2)
     return done.returncode == 0
 
 

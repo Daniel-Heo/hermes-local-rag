@@ -75,7 +75,12 @@ def test_image_tool_exposes_explicit_version_history():
 
 
 def test_curated_image_is_durable_searchable_and_deleted(tmp_path):
+    import sys
+    import shutil
     from local_rag import LocalRagProvider
+    # Saving fails closed without OCR, so this needs the same runtime as the OCR test above.
+    if not shutil.which('tesseract') and not (sys.platform == 'darwin' and shutil.which('swift')):
+        pytest.skip('No installed local OCR runtime')
     root = tmp_path / 'project'
     root.mkdir()
     original = root / 'logo.png'

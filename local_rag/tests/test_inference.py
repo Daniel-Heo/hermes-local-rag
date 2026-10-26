@@ -1,14 +1,25 @@
 import importlib.util
+import os
 import threading
 import tempfile
 from pathlib import Path
 import pytest
 
+from local_rag._wincompat import connect_socket
+from local_rag.tests.test_wincompat import (graceful_popen_kwargs, read_line, remove_tree, service_pid,
+                                            stop_gracefully, stop_profile_daemon)
+
 
 @pytest.fixture
 def home():
-    with tempfile.TemporaryDirectory(dir=Path.cwd(), prefix=".it-") as name:
-        yield Path(name)
+    # Windows cannot delete files a live daemon (or its venv launcher) still holds open.
+    with tempfile.TemporaryDirectory(dir=Path.cwd(), prefix=".it-", ignore_cleanup_errors=os.name == 'nt') as name:
+        try:
+            yield Path(name)
+        finally:
+            if os.name == 'nt':
+                stop_profile_daemon(Path(name))
+                remove_tree(Path(name))
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -40,7 +51,10 @@ def test_private_singleton_service(home):
     server = InferenceServer(tmp_path, backend=backend)
     server.start()
     try:
-        assert server.socket_path.stat().st_mode & 0o777 == 0o600
+        if os.name != 'nt':
+            assert server.socket_path.stat().st_mode & 0o777 == 0o600
+        else:  # Windows listens on loopback TCP and publishes only the port; the token still guards it.
+            assert int(server.socket_path.read_text(encoding='ascii')) > 0
         other = InferenceServer(tmp_path, backend=backend)
         import pytest
         with pytest.raises(RuntimeError, match='already running'):
@@ -95,7 +109,6 @@ def test_interactive_capacity_reserved_and_priority_deadlines(home):
 
 def test_auth_and_deadline_do_not_create_replacement_worker(home):
     from local_rag.inference import InferenceClient, InferenceServer, _send, _receive
-    import socket
     entered, release = threading.Event(), threading.Event()
     calls = []
     def backend(op, value, **kwargs):
@@ -107,8 +120,7 @@ def test_auth_and_deadline_do_not_create_replacement_worker(home):
     server = InferenceServer(home, backend=backend)
     server.start()
     try:
-        with socket.socket(socket.AF_UNIX) as conn:
-            conn.connect(str(server.socket_path))
+        with connect_socket(server.socket_path, 5) as conn:
             _send(conn, {'token': 'wrong', 'op': 'query', 'value': 'secret'})
             assert 'Unauthorized' in _receive(conn)['error']
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -190,16 +202,15 @@ def test_crash_recovery_rotates_token_and_keeps_profile_isolation(home):
     import subprocess
     import sys
     import os
-    import select
-    import socket
     from local_rag.inference import InferenceClient, _send, _receive
     env = os.environ.copy()
     env.pop('PYTHONPATH', None)
     command = [sys.executable, '-m', 'local_rag.inference', '--home', str(home)]
     def start():
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-        assert select.select([child.stdout], [], [], 10)[0]
-        assert 'ready' in child.stdout.readline(), child.stderr.read()
+        line = read_line(child.stdout, 10)
+        assert 'ready' in line, child.stderr.read()
+        child.service_pid = service_pid(child, line)
         return child
     child = start()
     token = (home / 'local-rag/.cache/token').read_text()
@@ -208,13 +219,12 @@ def test_crash_recovery_rotates_token_and_keeps_profile_isolation(home):
     child = start()
     try:
         assert (home / 'local-rag/.cache/token').read_text() != token
-        with socket.socket(socket.AF_UNIX) as conn:
-            conn.connect(str(home / 'local-rag/.cache/i.sock'))
+        with connect_socket(home / 'local-rag/.cache/i.sock', 5) as conn:
             _send(conn, dict(token=token, op='ping'))
             assert 'Unauthorized' in _receive(conn)['error']
         with pytest.raises(FileNotFoundError):
             InferenceClient(home / 'other-profile').request('ping')
-        assert InferenceClient(home).request('ping')['pid'] == child.pid
+        assert InferenceClient(home).request('ping')['pid'] == child.service_pid
     finally:
         child.terminate()
         child.wait(timeout=10)
@@ -227,21 +237,21 @@ def test_standalone_service_subprocess_singleton_and_shutdown(home):
     env = os.environ.copy()
     env.pop('PYTHONPATH', None)
     command = [sys.executable, '-m', 'local_rag.inference', '--home', str(home)]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                               **graceful_popen_kwargs())
     try:
-        import select
-        assert select.select([process.stdout], [], [], 10)[0], 'service did not start'
-        line = process.stdout.readline()
+        line = read_line(process.stdout, 10)
         assert 'ready' in line, process.stderr.read()
+        pid = service_pid(process, line)
         from local_rag.inference import InferenceClient
         client = InferenceClient(home)
         with ThreadPoolExecutor(max_workers=8) as pool:
-            assert set(pool.map(lambda _: client.request('ping')['pid'], range(16))) == {process.pid}
+            assert set(pool.map(lambda _: client.request('ping')['pid'], range(16))) == {pid}
         duplicate = subprocess.run(command, capture_output=True, text=True, env=env, timeout=10)
         assert duplicate.returncode != 0 and 'already running' in duplicate.stderr
-        assert client.request('ping')['pid'] == process.pid
+        assert client.request('ping')['pid'] == pid
     finally:
-        process.terminate()
+        stop_gracefully(process)
         process.wait(timeout=10)
     assert process.returncode == 0
     assert not (home / 'local-rag/.cache/i.sock').exists()

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+
+from ._wincompat import chmod as _wc_chmod
 from typing import Any
 
 
@@ -57,7 +59,7 @@ class LocalRagConfig:
             + "\n",
             encoding="utf-8",
         )
-        temporary.chmod(0o600)
+        _wc_chmod(temporary, 0o600)
         temporary.replace(path)
         return path
 

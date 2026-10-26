@@ -35,9 +35,10 @@ def _private_directory(path):
     path = Path(path)
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
     info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or _wc.is_link_stat(info) or info.st_uid != _wc.getuid():
+    if (not stat.S_ISDIR(info.st_mode) or _wc.is_link_stat(info) or info.st_uid != _wc.getuid()
+            or _wc.foreign_owner(path)):
         raise PermissionError('Inference directory must be owned by this user, not a symlink')
-    path.chmod(0o700)
+    _wc.chmod(path, 0o700)
     return path
 
 
@@ -249,7 +250,7 @@ def _private_file(path, *, unshared=False):
           else _wc.open_nofollow(path, os.O_CREAT | os.O_RDWR | _wc.O_NONBLOCK, 0o600))
     info = os.fstat(fd)
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != _wc.getuid()
-            or _wc.insecure_mode(info.st_mode) or info.st_nlink != 1):
+            or _wc.insecure_mode(info.st_mode, fd) or info.st_nlink != 1):
         os.close(fd)
         raise PermissionError('Insecure inference lifecycle file')
     return os.fdopen(fd, 'r+')
@@ -350,7 +351,7 @@ class InferenceClient:
                         env = dict(os.environ)
                         env.pop('PYTHONPATH', None)
                         child = subprocess.Popen(
-                            [_wc.inference_python(), '-m', 'local_rag.inference', '--home', str(self.home),
+                            [_wc.detached_interpreter(_wc.inference_python(), env), '-m', 'local_rag.inference', '--home', str(self.home),
                              *_wc.launch_fd_args(launch.fileno())],
                             cwd=str(Path(__file__).resolve().parent.parent), env=env,
                             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
@@ -382,13 +383,13 @@ class InferenceClient:
     def _request(self, op, value='', *, priority='interactive', socket_timeout=None, **kwargs):
         info = self.directory.lstat()
         if (not stat.S_ISDIR(info.st_mode) or _wc.is_link_stat(info) or info.st_uid != _wc.getuid()
-                or _wc.insecure_mode(info.st_mode)):
+                or _wc.insecure_mode(info.st_mode, self.directory)):
             raise PermissionError('Insecure inference directory')
         fd = _wc.open_nofollow(self.directory / 'token', os.O_RDONLY | _wc.O_NONBLOCK)
         with os.fdopen(fd) as handle:
             info = os.fstat(handle.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != _wc.getuid()
-                    or _wc.insecure_mode(info.st_mode) or info.st_nlink != 1):
+                    or _wc.insecure_mode(info.st_mode, handle.fileno()) or info.st_nlink != 1):
                 raise PermissionError('Insecure inference token')
             token = handle.read(256)
         with _wc.connect_socket(self.directory / 'i.sock',

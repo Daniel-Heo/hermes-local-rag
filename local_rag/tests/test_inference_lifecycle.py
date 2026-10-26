@@ -11,12 +11,32 @@ import time
 
 import pytest
 
+from local_rag import _wincompat as wc
 from local_rag._wincompat import fcntl
 from local_rag.inference import InferenceClient
 from local_rag.tests.test_wincompat import HARD_KILL, pid_alive, read_line, wait_output, wait_pid_exit
 
 IS_WINDOWS = os.name == 'nt'
-no_mode_bits = pytest.mark.skipif(IS_WINDOWS, reason='POSIX permission bits do not exist on Windows; profile privacy comes from the inherited %LOCALAPPDATA% ACL')
+
+
+def expose(path):
+    """Let other accounts read path: mode 0o644/0o755, or an Everyone read ACE on Windows."""
+    if IS_WINDOWS:
+        subprocess.run(['icacls', str(path), '/grant', '*S-1-1-0:(R)'], check=True, capture_output=True)
+    else:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def conceal(path):
+    if IS_WINDOWS:
+        subprocess.run(['icacls', str(path), '/remove:g', '*S-1-1-0'], check=True, capture_output=True)
+    else:
+        path.chmod(0o700 if path.is_dir() else 0o600)
+
+
+def access(path):
+    """Mode bits, or on Windows the owner and DACL entries."""
+    return wc._read_security(path) if IS_WINDOWS else path.stat().st_mode & 0o777
 
 
 @pytest.fixture
@@ -24,6 +44,9 @@ def homes(monkeypatch, tmp_path):
     if IS_WINDOWS:
         # Spawned daemons must use this interpreter, never the user's installed Hermes venv.
         monkeypatch.setenv('HERMES_PYTHON', sys.executable)
+        # Default user-profile ACL (user, SYSTEM, Administrators), inherited by every child, so a
+        # foreign ACE inherited from wherever the temp root lives cannot leak into the homes.
+        wc.chmod(tmp_path, 0o700)
     # /tmp keeps AF_UNIX paths short. Windows uses loopback TCP and pytest's temp root, which
     # pytest purges itself: the venv launcher of a just-killed daemon may still hold its log.
     root = nullcontext(str(tmp_path)) if IS_WINDOWS else tempfile.TemporaryDirectory(prefix='rag-life-', dir='/tmp')
@@ -277,12 +300,12 @@ def test_lifetime_owner_lock_blocks_replacement_without_socket(homes):
 def test_insecure_directory_and_symlink_lock_are_not_repaired(homes):
     directory = homes[0] / 'local-rag/.cache'
     directory.mkdir(parents=True, mode=0o755)
-    if not IS_WINDOWS:  # Windows has no POSIX mode bits; only the symlink half applies.
-        directory.chmod(0o755)
-        with pytest.raises(PermissionError, match='directory'):
-            InferenceClient(homes[0]).embed_query('probe')
-        assert directory.stat().st_mode & 0o777 == 0o755
-        directory.chmod(0o700)
+    expose(directory)
+    before = access(directory)
+    with pytest.raises(PermissionError, match='directory'):
+        InferenceClient(homes[0]).embed_query('probe')
+    assert access(directory) == before
+    conceal(directory)
     target = homes[0] / 'untouched'
     target.write_text('do not overwrite')
     (directory / 'startup.lock').symlink_to(target)
@@ -292,13 +315,15 @@ def test_insecure_directory_and_symlink_lock_are_not_repaired(homes):
     assert not (directory / 'inference.log').exists()
 
 
-@pytest.mark.parametrize('kind', ['hardlink', 'symlink', pytest.param('permissions', marks=no_mode_bits)])
+@pytest.mark.parametrize('kind', ['hardlink', 'symlink', 'permissions'])
 def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind):
     directory = homes[0] / 'local-rag/.cache'
     directory.mkdir(parents=True, mode=0o700)
     victim = homes[0] / 'victim'
     victim.write_text('keep this secret intact')
-    victim.chmod(0o600 if kind != 'permissions' else 0o644)
+    victim.chmod(0o600)
+    if kind == 'permissions':
+        expose(victim)
     token = directory / 'token'
     if kind == 'symlink':
         token.symlink_to(victim)
@@ -308,6 +333,7 @@ def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind)
         victim.rename(token)
         victim = token
     before = victim.stat()
+    before_access = access(victim)
     env = dict(os.environ)
     env.pop('PYTHONPATH', None)
     child = subprocess.Popen(
@@ -318,6 +344,7 @@ def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind)
         wait_output(child, 5)
         assert victim.read_text() == 'keep this secret intact'
         assert victim.stat().st_mode == before.st_mode
+        assert access(victim) == before_access
         out, err = child.communicate(timeout=5)
         assert child.returncode != 0, (out, err)
     finally:
@@ -326,14 +353,78 @@ def test_direct_server_rejects_unsafe_token_without_changing_victim(homes, kind)
         child.wait(timeout=5)
 
 
-@no_mode_bits
 def test_insecure_token_is_not_read_or_repaired(homes):
     demand(homes[0])
     token_path = homes[0] / 'local-rag/.cache/token'
-    token_path.chmod(0o644)
+    expose(token_path)
+    before = access(token_path)
     try:
         with pytest.raises(PermissionError, match='token'):
             InferenceClient(homes[0]).embed_query('probe')
-        assert token_path.stat().st_mode & 0o777 == 0o644
+        assert access(token_path) == before
     finally:
-        token_path.chmod(0o600)
+        conceal(token_path)
+
+
+def venv_launcher():
+    """The venv's Scripts\\python.exe, which respawns the base interpreter on Windows."""
+    launcher = Path(sys.prefix) / 'Scripts' / 'python.exe'
+    if sys.prefix == sys.base_prefix or not launcher.is_file():
+        pytest.skip('Needs pytest running inside a Windows venv')
+    return str(launcher)
+
+
+def opens_elsewhere(path):
+    """Whether another process can open the launch guard (it is opened with share mode 0)."""
+    code = 'import sys\nopen(sys.argv[1], "r+b").close()'
+    return subprocess.run([sys.executable, '-c', code, str(path)], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows hands launch.lock over as an inherited no-sharing handle')
+def test_windows_launch_guard_held_while_starting_and_released_when_ready(homes, monkeypatch):
+    from local_rag import _wincompat as wc
+    import local_rag.inference as inference
+    launcher = venv_launcher()
+    monkeypatch.setenv('HERMES_PYTHON', launcher)
+    guard = homes[0] / 'local-rag/.cache/launch.lock'
+    seen = []
+    real_popen = subprocess.Popen
+
+    def observed(argv, **kwargs):
+        child = real_popen(argv, **kwargs)
+        if '--launch-fd' not in argv:  # opens_elsewhere() itself goes through Popen too.
+            return child
+        seen.append((argv[0], kwargs['env'].get('__PYVENV_LAUNCHER__'), opens_elsewhere(guard)))
+        return child
+    monkeypatch.setattr(inference.subprocess, 'Popen', observed)
+    InferenceClient(homes[0]).ensure_started()
+    assert [held for *_, held in seen] == [False]
+    assert opens_elsewhere(guard)
+    # The daemon is the base interpreter itself, not a launcher that would keep the handle.
+    assert seen == [(wc.detached_interpreter(launcher, {}), launcher, False)]
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows hands launch.lock over as an inherited no-sharing handle')
+def test_windows_daemon_alone_holds_guard_until_ready_through_venv(homes):
+    from local_rag import _wincompat as wc
+    from local_rag.inference import _private_directory
+    directory = homes[1] / 'local-rag/.cache'
+    _private_directory(directory)
+    guard = directory / 'launch.lock'
+    fd = wc.open_unshared(guard)
+    env = dict(os.environ)
+    env.pop('PYTHONPATH', None)
+    child = subprocess.Popen(
+        [wc.detached_interpreter(venv_launcher(), env), '-m', 'local_rag.inference', '--home', str(homes[1]),
+         *wc.launch_fd_args(fd)], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        **wc.detached_popen_kwargs(fd))
+    try:
+        os.close(fd)  # The starter gives up; only the starting daemon holds the guard now.
+        assert not opens_elsewhere(guard)
+        assert child.stdout is not None
+        assert json.loads(read_line(child.stdout, 10))['pid'] == child.pid
+        assert opens_elsewhere(guard)
+    finally:
+        child.kill()
+        child.wait(timeout=5)
+        child.stdout.close()

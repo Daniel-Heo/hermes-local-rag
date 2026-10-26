@@ -7,6 +7,8 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from ._wincompat import chmod as _wc_chmod
+
 
 def _require_integrity(connection: sqlite3.Connection, path: Path) -> None:
     result = connection.execute("PRAGMA integrity_check").fetchone()
@@ -111,7 +113,7 @@ def canonical_database_path(directory: Path, name: str) -> Path:
                 sidecar.unlink(missing_ok=True)
             _fsync_directory(directory)
             os.replace(temporary, target)
-            target.chmod(0o600)
+            _wc_chmod(target, 0o600)
             _fsync_directory(directory)
 
             # closing(): an open handle blocks a later os.replace/unlink on Windows.

@@ -29,7 +29,7 @@ _PLUGIN_PARENT = str(Path(__file__).resolve().parents[2])
 if _PLUGIN_PARENT not in sys.path:
     sys.path.insert(0, _PLUGIN_PARENT)
 
-from local_rag._wincompat import default_hermes_home
+from local_rag._wincompat import chmod as _wc_chmod, default_hermes_home, fchmod as _wc_fchmod
 from local_rag.backfill import plan_key, validate_plan_payload
 from local_rag.database import canonical_database_path
 from local_rag.policy import IngestDecision, classify_text
@@ -332,7 +332,7 @@ def setup_config(request: SetupConfigRequest):
     payload = request.model_dump()
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.chmod(temporary, 0o600)
+    _wc_chmod(temporary, 0o600)
     os.replace(temporary, path)
     return {"saved": True, "config": payload, "reindex_performed": False}
 
@@ -367,7 +367,7 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
-        (os.fchmod(descriptor, 0o600) if hasattr(os, "fchmod") else None)
+        _wc_fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
@@ -400,7 +400,7 @@ def setup_backfill_preview(request: ConfirmRequest):
         _run([hermes, "local_rag", "preview", "--plan", str(plan), "--home", str(_home())], job)
         if not plan.is_file():
             raise RuntimeError("Backfill preview command did not create a review plan")
-        os.chmod(plan, 0o600)
+        _wc_chmod(plan, 0o600)
     with _PLAN_LOCK:
         return _start("backfill-preview", worker)
 

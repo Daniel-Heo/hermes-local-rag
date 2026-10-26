@@ -5,7 +5,7 @@ No attachment listener, temporary attachment store, or conversation ingestion.
 OCR is local Tesseract when installed; absence is reported, never invented.
 """
 from __future__ import annotations
-from ._wincompat import IS_WINDOWS as _WC_IS_WINDOWS, fchmod as _wc_fchmod, getuid as _wc_getuid, O_NONBLOCK as _WC_O_NONBLOCK, open_nofollow as _wc_open_nofollow, is_link as _wc_is_link
+from ._wincompat import IS_WINDOWS as _WC_IS_WINDOWS, fchmod as _wc_fchmod, getuid as _wc_getuid, O_NONBLOCK as _WC_O_NONBLOCK, open_nofollow as _wc_open_nofollow, is_link as _wc_is_link, chmod as _wc_chmod
 
 import hashlib
 import json
@@ -92,7 +92,7 @@ class CuratedImages:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if _wc_is_link(self.directory):
             raise ValueError('Managed images directory must not be a symlink')
-        self.directory.chmod(0o700)
+        _wc_chmod(self.directory, 0o700)
         self.text, self.visual, self.ocr = text, visual, ocr
         self.lock = threading.RLock()
         database = self.directory.parent / 'curated-images.db'
@@ -154,7 +154,7 @@ class CuratedImages:
         cache.mkdir(mode=0o700, exist_ok=True)
         if _wc_is_link(cache):
             raise ValueError('Image staging directory must not be a symlink')
-        cache.chmod(0o700)
+        _wc_chmod(cache, 0o700)
         return cache
 
     def _atomic_file(self, target, data):

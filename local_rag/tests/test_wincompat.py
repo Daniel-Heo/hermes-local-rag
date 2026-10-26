@@ -192,7 +192,8 @@ def test_flock_is_released_when_holder_process_exits(tmp_path):
             'print("locked", flush=True)\ntime.sleep(60)\n')
     env = dict(os.environ)
     env.pop('PYTHONPATH', None)
-    child = subprocess.Popen([sys.executable, '-c', code, str(path)], stdout=subprocess.PIPE,
+    # Kill the holder itself: a venv launcher's wait() returns before its child is gone.
+    child = subprocess.Popen([wc.detached_interpreter(sys.executable, env), '-c', code, str(path)], stdout=subprocess.PIPE,
                              text=True, env=env, cwd=str(Path(wc.__file__).resolve().parent.parent))
     try:
         assert read_line(child.stdout, 10).strip() == 'locked'
@@ -352,6 +353,64 @@ def test_launch_fd_args_pass_os_handle_released_by_close_launch_fd(tmp_path):
     os.close(wc.open_unshared(path))
 
 
+# --- detached daemon interpreter (venv launcher bypass) ----------------------
+
+PATHS_PROBE = 'import json, sys, numpy; print(json.dumps([sys.prefix, sys.executable, sys.path, numpy.__file__]))'
+
+
+@windows_only
+def test_detached_interpreter_runs_venv_base_with_the_launchers_paths():
+    launcher = Path(sys.prefix) / 'Scripts' / 'python.exe'
+    if sys.prefix == sys.base_prefix or not launcher.is_file():
+        pytest.skip('Needs pytest running inside a Windows venv')
+    env = dict(os.environ)
+    env.pop('__PYVENV_LAUNCHER__', None)
+    through_launcher = subprocess.run([str(launcher), '-c', PATHS_PROBE], env=env, capture_output=True,
+                                      text=True, check=True).stdout
+    env['__PYVENV_LAUNCHER__'] = 'stale value from the starting process'
+    base = wc.detached_interpreter(str(launcher), env)
+    assert Path(base) != launcher and Path(base).is_file()
+    assert env['__PYVENV_LAUNCHER__'] == str(launcher)
+    direct = subprocess.run([base, '-c', PATHS_PROBE], env=env, capture_output=True, text=True, check=True).stdout
+    assert json.loads(direct) == json.loads(through_launcher)
+
+
+@windows_only
+def test_detached_interpreter_keeps_plain_interpreter_without_inherited_venv():
+    plain = getattr(sys, '_base_executable', sys.executable)
+    env = {**os.environ, '__PYVENV_LAUNCHER__': str(Path(sys.prefix) / 'Scripts' / 'python.exe')}
+    assert wc.detached_interpreter(plain, env) == plain
+    assert '__PYVENV_LAUNCHER__' not in env  # A plain interpreter must not adopt the starter's venv.
+    out = subprocess.run([plain, '-c', 'import sys; print(sys.prefix == sys.base_prefix)'],
+                         env=env, capture_output=True, text=True)
+    assert out.stdout.strip() == 'True'
+
+
+@windows_only
+@pytest.mark.parametrize('case', ['no-home-key', 'no-same-name-base', 'home-is-launcher'])
+def test_detached_interpreter_keeps_launcher_when_pyvenv_cfg_gives_no_base(tmp_path, case):
+    launcher = tmp_path / 'venv' / 'Scripts' / 'python.exe'
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b'')
+    base = tmp_path / 'base'
+    base.mkdir()
+    (base / 'pythonw.exe').write_bytes(b'')  # Present, but not the launcher's name.
+    home = {'no-home-key': 'include-system-site-packages = false',
+            'no-same-name-base': f'home = {base}',
+            'home-is-launcher': f'home = {launcher.parent}'}[case]
+    (tmp_path / 'venv' / 'pyvenv.cfg').write_text(f'{home}\nversion = 3.11.9\n', encoding='utf-8')
+    env = {'__PYVENV_LAUNCHER__': 'inherited from the starting process'}
+    assert wc.detached_interpreter(str(launcher), env) == str(launcher)
+    assert env == {}
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason='POSIX branch: no launcher, unchanged command and environment')
+def test_detached_interpreter_is_identity_on_posix():
+    env = {'__PYVENV_LAUNCHER__': 'kept'}
+    assert wc.detached_interpreter(sys.executable, env) == sys.executable
+    assert env == {'__PYVENV_LAUNCHER__': 'kept'}
+
+
 # --- host-runtime fallback of inference_python() --------------------------
 
 def _fallback_home(monkeypatch, tmp_path):
@@ -380,7 +439,7 @@ def test_fallback_runtime_import_failure_reports_clear_start_error(monkeypatch, 
     _fallback_home(monkeypatch, tmp_path)
     real_popen = subprocess.Popen
     def missing_dependency(argv, **kwargs):
-        assert argv[0] == sys.executable
+        assert argv[0] == wc.detached_interpreter(sys.executable, {})
         return real_popen([sys.executable, '-c', "raise ModuleNotFoundError(\"No module named 'ai_edge_litert'\")"],
                           **kwargs)
     monkeypatch.setattr(inference.subprocess, 'Popen', missing_dependency)
@@ -488,3 +547,132 @@ def test_inference_rejects_junctioned_private_directory(tmp_path):
     with pytest.raises(PermissionError, match='Insecure inference directory'):
         InferenceClient(home)._request('ping')
     assert not list((tmp_path / 'outside').iterdir())
+
+
+# --- private ACLs (replacement for 0o600/0o700 and the 0o077 check) ---------
+
+INHERITED_ACE = 0x10
+CONTAINER_AND_OBJECT_INHERIT = 0x3
+PRIVATE_SIDS = {'S-1-5-18', 'S-1-5-32-544'}
+
+
+def _grant(path, sid, rights='(R)'):
+    subprocess.run(['icacls', str(path), '/grant', f'*{sid}:{rights}'], check=True, capture_output=True)
+
+
+def _private_root(tmp_path):
+    """tmp_path with the default user-profile ACL: user, SYSTEM, Administrators, inherited."""
+    wc.chmod(tmp_path, 0o700)
+    return tmp_path
+
+
+def _assert_protected_private(target, *, flags=0):
+    owner, entries = wc._read_security(target)
+    assert owner == wc.current_user_sid()
+    # CPython with the CVE-2024-4030 fix: os.mkdir(mode=0o700) grants OWNER RIGHTS instead of the user SID.
+    assert {sid for *_, sid in entries} in (PRIVATE_SIDS | {wc.current_user_sid()}, PRIVATE_SIDS | {'S-1-3-4'})
+    assert all(ace_flags == flags for _, ace_flags, _, _ in entries)  # Explicit, not inherited.
+    assert not wc.acl_insecure(target)
+
+
+@windows_only
+def test_acl_default_profile_inheritance_passes(tmp_path):
+    cache = _private_root(tmp_path) / 'local-rag' / '.cache'
+    cache.mkdir(parents=True)
+    (cache / 'token').write_text('token')
+    for path in (cache.parent, cache, cache / 'token'):
+        _, entries = wc._read_security(path)
+        assert entries and all(flags & INHERITED_ACE for _, flags, _, _ in entries)
+        assert not wc.acl_insecure(path)
+        assert not wc.foreign_owner(path)
+
+
+@windows_only
+@pytest.mark.parametrize('sid, rights, insecure', [
+    ('S-1-1-0', '(R)', True),         # Everyone
+    ('S-1-5-32-545', '(R)', True),    # BUILTIN\Users
+    ('S-1-5-19', '(W)', True),        # another account: NT AUTHORITY\LOCAL SERVICE
+    ('S-1-1-0', '(X)', False),        # traverse/execute only: no read or write class right
+])
+def test_acl_foreign_ace_is_judged_by_read_write_rights(tmp_path, sid, rights, insecure):
+    path = _private_root(tmp_path) / 'token'
+    path.write_text('token')
+    _grant(path, sid, rights)
+    assert wc.acl_insecure(path) is insecure
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        assert wc.insecure_mode(os.fstat(fd).st_mode, fd) is insecure
+    finally:
+        os.close(fd)
+
+
+@windows_only
+def test_acl_inherited_foreign_ace_is_insecure(tmp_path):
+    parent = _private_root(tmp_path) / 'shared'
+    parent.mkdir()
+    _grant(parent, 'S-1-1-0', '(OI)(CI)(R)')
+    (parent / 'token').write_text('token')
+    assert wc.acl_insecure(parent) and wc.acl_insecure(parent / 'token')
+
+
+@windows_only
+def test_acl_null_dacl_is_insecure(tmp_path):
+    path = _private_root(tmp_path) / 'token'
+    path.write_text('token')
+    assert wc._SetNamedSecurityInfoW(str(path), wc._SE_FILE_OBJECT, wc._DACL_SECURITY_INFORMATION,
+                                     None, None, None, None) == 0
+    assert wc._read_security(path)[1] is None
+    assert wc.acl_insecure(path)
+
+
+def _other_account_sid():
+    return 'S-1-5-21-1-2-3-1001'
+
+
+@windows_only
+def test_acl_owner_other_than_this_user_is_rejected(tmp_path, monkeypatch):
+    from local_rag.inference import _private_directory
+    cache = _private_root(tmp_path) / '.cache'
+    cache.mkdir()
+    # Pretend another account is running: the real owner is then a foreign account.
+    monkeypatch.setattr(wc, 'current_user_sid', _other_account_sid)
+    assert wc.foreign_owner(cache) and wc.acl_insecure(cache)
+    with pytest.raises(PermissionError, match='owned by this user'):
+        _private_directory(cache)
+
+
+@windows_only
+def test_private_creation_applies_protected_dacl_and_keeps_existing_files(tmp_path):
+    from local_rag.inference import _private_directory, _private_file
+    parent = _private_root(tmp_path) / 'shared'
+    parent.mkdir()
+    _grant(parent, 'S-1-1-0', '(OI)(CI)(R)')
+    fd = wc.open_nofollow(parent / 'token', os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        _assert_protected_private(fd)
+    finally:
+        os.close(fd)
+    with pytest.raises(FileExistsError):
+        wc.open_nofollow(parent / 'token', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    # An existing exposed file is opened as it is, and _private_file refuses it unrepaired.
+    exposed = parent / 'owner.lock'
+    exposed.write_text('')
+    with pytest.raises(PermissionError, match='Insecure'):
+        _private_file(exposed)
+    assert wc.acl_insecure(exposed)
+    # fchmod(0o600) and chmod(0o600) are the explicit repairs, as on POSIX.
+    fd = os.open(exposed, os.O_RDWR)
+    try:
+        wc.fchmod(fd, 0o600)
+        _assert_protected_private(fd)
+    finally:
+        os.close(fd)
+    other = parent / 'config.json'
+    other.write_text('{}')
+    wc.chmod(other, 0o600)
+    _assert_protected_private(other)
+    # _private_directory chmods 0o700: protected, inherited by what is created inside.
+    cache = _private_directory(parent / '.cache')
+    _assert_protected_private(cache, flags=CONTAINER_AND_OBJECT_INHERIT)
+    (cache / 'inference.log').write_text('')
+    assert not wc.acl_insecure(cache / 'inference.log')

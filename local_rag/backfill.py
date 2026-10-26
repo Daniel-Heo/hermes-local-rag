@@ -1,3 +1,4 @@
+# local_rag windows patch v1
 from __future__ import annotations
 
 import json
@@ -14,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid
 from .database import canonical_database_path
 from .policy import IngestDecision, classify_text
 
@@ -115,9 +117,9 @@ def plan_key(hermes_home: Path, *, create: bool) -> bytes:
         raise ValueError("Backfill trust key is missing; create a new preview") from exc
     with os.fdopen(descriptor, "rb") as handle:
         info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != _wc_getuid():
             raise ValueError("Backfill trust key ownership is invalid")
-        os.fchmod(handle.fileno(), 0o600)
+        _wc_fchmod(handle.fileno(), 0o600)
         key = handle.read()
     if len(key) != 32:
         raise ValueError("Backfill trust key is invalid")
@@ -211,7 +213,9 @@ def extract_session(
             if item["kind"] == "skip":
                 continue
             if item["scope"] == "project" and not project:
-                raise ValueError("Project-scoped extraction requires a session project")
+                # Session has no recorded cwd (common for native Windows / Desktop sessions):
+                # keep the candidate but narrow it to this session instead of aborting the preview.
+                item["scope"] = "session"
             key = (item["scope"], item["subject"].casefold(), " ".join(item["text"].casefold().split()))
             existing = by_key.get(key)
             if existing:
@@ -262,7 +266,7 @@ def build_plan(
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}-", suffix=".tmp", dir=target.parent)
         temporary = Path(temporary_name)
         try:
-            os.fchmod(descriptor, 0o600)
+            _wc_fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, ensure_ascii=False, indent=2)
                 handle.write("\n")

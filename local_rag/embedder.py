@@ -14,7 +14,11 @@ _shared_lock = threading.Lock()
 
 
 def default_model_dir() -> Path:
-    return Path(os.environ.get("HERMES_EMBEDDINGGEMMA_DIR", "~/.hermes/models/embeddinggemma-litert")).expanduser()
+    configured = os.environ.get("HERMES_EMBEDDINGGEMMA_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    # Follow HERMES_HOME like the dashboard downloader does (it is not ~/.hermes on native Windows).
+    return Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser() / "models" / "embeddinggemma-litert"
 
 
 def default_model_path() -> Path:

@@ -1,3 +1,4 @@
+# local_rag windows patch v1
 """Dashboard setup API for Hermes Local RAG.
 
 Long operations run in a single background job. The API reports only observed
@@ -55,15 +56,15 @@ def _home() -> Path:
 
 def _python() -> Path:
     configured = os.environ.get("HERMES_PYTHON")
-    return Path(configured) if configured else _home() / "hermes-agent" / "venv" / "bin" / "python"
+    return Path(configured) if configured else _home() / "hermes-agent" / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
 def _hf() -> Path:
-    return _python().parent / "hf"
+    return _python().parent / ("hf.exe" if os.name == "nt" else "hf")
 
 
 def _clean_env(*, include_plugin: bool = False) -> dict[str, str]:
-    env = {key: os.environ[key] for key in ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
+    env = {key: os.environ[key] for key in ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR", "USERPROFILE", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "HF_HOME", "PYTHONUTF8", "HERMES_PYTHON") if key in os.environ}
     env["HERMES_HOME"] = str(_home())
     if include_plugin:
         env["PYTHONPATH"] = str(_home() / "plugins")
@@ -365,7 +366,7 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
+        (os.fchmod(descriptor, 0o600) if hasattr(os, "fchmod") else None)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.write("\n")

@@ -1,9 +1,11 @@
+# local_rag windows patch v1
 """Explicitly curated image memory. Derivatives share the image row and scope.
 
 No attachment listener, temporary attachment store, or conversation ingestion.
 OCR is local Tesseract when installed; absence is reported, never invented.
 """
 from __future__ import annotations
+from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid, O_NOFOLLOW as _WC_O_NOFOLLOW, O_NONBLOCK as _WC_O_NONBLOCK
 
 import hashlib
 import json
@@ -94,9 +96,9 @@ class CuratedImages:
         self.text, self.visual, self.ocr = text, visual, ocr
         self.lock = threading.RLock()
         database = self.directory.parent / 'curated-images.db'
-        fd = os.open(database, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        fd = os.open(database, os.O_CREAT | os.O_RDWR | _WC_O_NOFOLLOW, 0o600)
         try:
-            os.fchmod(fd, 0o600)
+            _wc_fchmod(fd, 0o600)
         finally:
             os.close(fd)
         self.db = sqlite3.connect(database, check_same_thread=False)
@@ -310,7 +312,7 @@ class CuratedImages:
     @staticmethod
     def _read_managed(path):
         # Do not follow replacement symlinks or read unbounded replacement files.
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(path, os.O_RDONLY | _WC_O_NOFOLLOW | _WC_O_NONBLOCK)
         with os.fdopen(fd, 'rb') as handle:
             import stat
             if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):

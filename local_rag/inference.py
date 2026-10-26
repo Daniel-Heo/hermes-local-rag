@@ -1,3 +1,4 @@
+# local_rag windows patch v1
 """Private profile-scoped inference. Foreground service; never manages Hermes processes.
 
 One worker owns both models, lazily loaded once. Clients never fall back to local
@@ -7,7 +8,8 @@ continues, but bounded queues and deadlines prevent unbounded follow-up work.
 from __future__ import annotations
 
 import argparse
-import fcntl
+from . import _wincompat as _wc
+from ._wincompat import fcntl
 import hmac
 import json
 import math
@@ -33,7 +35,7 @@ def _private_directory(path):
     path = Path(path)
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
     info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != _wc.getuid():
         raise PermissionError('Inference directory must be owned by this user, not a symlink')
     path.chmod(0o700)
     return path
@@ -103,7 +105,7 @@ class InferenceServer:
         _private_directory(self.directory)
         if len(os.fsencode(self.socket_path)) >= 104:
             raise ValueError('Profile path too long for a Unix socket (104-byte limit)')
-        fd = os.open(self.directory / 'owner.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        fd = os.open(self.directory / 'owner.lock', os.O_CREAT | os.O_RDWR | _wc.O_NOFOLLOW, 0o600)
         self.lock = os.fdopen(fd, 'w')
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -119,10 +121,7 @@ class InferenceServer:
                 handle.write(self.token)
             self.token_owned = True
             self.socket_path.unlink(missing_ok=True)
-            self.listener = socket.socket(socket.AF_UNIX)
-            self.listener.bind(str(self.socket_path))
-            self.socket_path.chmod(0o600)
-            self.listener.listen(32)
+            self.listener = _wc.listen_socket(self.socket_path, backlog=32)
             self.listener.settimeout(.2)
             for target in (self._worker, self._accept):
                 thread = threading.Thread(target=target, daemon=True)
@@ -245,10 +244,10 @@ class InferenceServer:
 
 
 def _private_file(path):
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | _wc.O_NOFOLLOW | _wc.O_NONBLOCK, 0o600)
     info = os.fstat(fd)
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & 0o077 or info.st_nlink != 1):
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != _wc.getuid()
+            or _wc.insecure_mode(info.st_mode) or info.st_nlink != 1):
         os.close(fd)
         raise PermissionError('Insecure inference lifecycle file')
     return os.fdopen(fd, 'r+')
@@ -273,12 +272,10 @@ class InferenceClient:
         except FileNotFoundError:
             # A missing token must not allow replacing a live, unauthenticated
             # listener. Probe transport only; never unlink or repair its files.
-            with socket.socket(socket.AF_UNIX) as conn:
-                conn.settimeout(timeout)
-                try:
-                    conn.connect(str(self.directory / 'i.sock'))
-                except (FileNotFoundError, ConnectionRefusedError):
-                    return False
+            try:
+                _wc.connect_socket(self.directory / 'i.sock', timeout).close()
+            except (FileNotFoundError, ConnectionRefusedError):
+                return False
             # The daemon may have bound between the first and second connect.
             # Authenticate again rather than misclassifying normal startup.
             try:
@@ -342,11 +339,11 @@ class InferenceClient:
                         env = dict(os.environ)
                         env.pop('PYTHONPATH', None)
                         child = subprocess.Popen(
-                            [sys.executable, '-m', 'local_rag.inference', '--home', str(self.home),
-                             '--launch-fd', str(launch.fileno())],
+                            [_wc.inference_python(), '-m', 'local_rag.inference', '--home', str(self.home),
+                             *_wc.launch_fd_args(launch.fileno())],
                             cwd=str(Path(__file__).resolve().parent.parent), env=env,
                             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                            start_new_session=True, close_fds=True, pass_fds=(launch.fileno(),))
+                            **_wc.detached_popen_kwargs(launch.fileno()))
                     # Reap our child if this client remains alive. Never terminate it on
                     # client shutdown or readiness timeout; the lifetime flock owns it.
                     threading.Thread(target=child.wait, daemon=True).start()
@@ -373,18 +370,17 @@ class InferenceClient:
 
     def _request(self, op, value='', *, priority='interactive', socket_timeout=None, **kwargs):
         info = self.directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != _wc.getuid() or _wc.insecure_mode(info.st_mode):
             raise PermissionError('Insecure inference directory')
-        fd = os.open(self.directory / 'token', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(self.directory / 'token', os.O_RDONLY | _wc.O_NOFOLLOW | _wc.O_NONBLOCK)
         with os.fdopen(fd) as handle:
             info = os.fstat(handle.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077 or info.st_nlink != 1):
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != _wc.getuid()
+                    or _wc.insecure_mode(info.st_mode) or info.st_nlink != 1):
                 raise PermissionError('Insecure inference token')
             token = handle.read(256)
-        with socket.socket(socket.AF_UNIX) as conn:
-            conn.settimeout(self.timeout + 1 if socket_timeout is None else socket_timeout)
-            conn.connect(str(self.directory / 'i.sock'))
+        with _wc.connect_socket(self.directory / 'i.sock',
+                                self.timeout + 1 if socket_timeout is None else socket_timeout) as conn:
             _send(conn, dict(token=token, op=op, value=str(value), dimensions=self.dimensions,
                              timeout=self.timeout, priority=priority, **kwargs))
             result = _receive(conn)
@@ -410,6 +406,7 @@ def main():
     parser.add_argument('--home', default=os.environ.get('HERMES_HOME', str(Path.home() / '.hermes')))
     parser.add_argument('--launch-fd', type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    os.environ.setdefault("HERMES_HOME", str(Path(args.home).expanduser()))
     server = InferenceServer(Path(args.home).expanduser())
     stopped = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):

@@ -28,6 +28,39 @@ _IMAGE_RECALL_GUIDANCE = (
     "questions; abstain when the pixels do not support the answer or cannot be inspected. "
 )
 
+_INFERENCE_MODULES = ("numpy", "tokenizers", "ai_edge_litert")
+_FIND_SPECS_CODE = (
+    "import importlib.util, sys; "
+    "sys.exit(0 if all(importlib.util.find_spec(m) for m in sys.argv[1:]) else 1)"
+)
+
+
+def _inference_ready() -> bool:
+    """Model file present and the inference interpreter has its dependencies.
+
+    Embedding runs in a child process (_wincompat.inference_python()); on Windows
+    that is HERMES_PYTHON (hermes-agent\\venv), not the host runtime. Importing
+    embedder here would require the heavy packages in the host runtime, which a
+    Hermes update replaces with a fresh dependency generation.
+    """
+    import os
+    import subprocess
+
+    from . import _wincompat as _wc
+
+    configured = os.environ.get("HERMES_EMBEDDINGGEMMA_DIR")
+    model_dir = (Path(configured).expanduser() if configured
+                 else Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser() / "models" / "embeddinggemma-litert")
+    if not (model_dir / "embeddinggemma-300M_seq512_mixed-precision.tflite").is_file():
+        return False
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        done = subprocess.run([_wc.inference_python(), "-c", _FIND_SPECS_CODE, *_INFERENCE_MODULES],
+                              capture_output=True, timeout=30, creationflags=flags)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
 
 class LocalRagProvider(MemoryProvider):
     def __init__(self, *, embedder: Any | None = None, visual_embedder: Any | None = None) -> None:
@@ -59,12 +92,7 @@ class LocalRagProvider(MemoryProvider):
     def is_available(self) -> bool:
         if self._embedder is not None:
             return True
-        try:
-            from .embedder import default_model_path
-            import ai_edge_litert.interpreter  # noqa: F401
-            return default_model_path().exists()
-        except (ImportError, OSError):
-            return False
+        return _inference_ready()
 
     def get_config_schema(self) -> list[dict[str, Any]]:
         return [

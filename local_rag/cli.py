@@ -1,4 +1,6 @@
+# local_rag windows patch v1
 from __future__ import annotations
+from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid, O_NOFOLLOW as _WC_O_NOFOLLOW, O_NONBLOCK as _WC_O_NONBLOCK
 
 import argparse
 import json
@@ -72,6 +74,24 @@ def _structured_model(llm):
     return model
 
 
+def _loads_json_lenient(content: str):
+    # Providers without native json_schema support (e.g. Anthropic via Hermes) may wrap the
+    # JSON in Markdown fences or add a sentence around it; recover the object if present.
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        text = text.rstrip()
+        if text.endswith("```"):
+            text = text[:-3]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
 def _auxiliary_structured_model():
     """Use Hermes active provider/auth without creating an agent or exposing tools."""
     from agent.auxiliary_client import call_llm
@@ -80,6 +100,7 @@ def _auxiliary_structured_model():
     def model(messages: list[dict[str, str]]) -> str:
         current = list(messages)
         last_error: Exception | None = None
+        last_preview = ""
         for attempt in range(2):
             response = call_llm(
                 messages=current,
@@ -97,17 +118,18 @@ def _auxiliary_structured_model():
             try:
                 if not isinstance(content, str):
                     raise ValueError("Structured extractor returned no text")
-                parsed = json.loads(content)
+                parsed = _loads_json_lenient(content)
                 validate(instance=parsed, schema=MEMORY_ITEMS_SCHEMA)
                 return json.dumps(parsed["items"], ensure_ascii=False)
             except (json.JSONDecodeError, ValidationError, ValueError, KeyError) as exc:
                 last_error = exc
+                last_preview = content[:160] if isinstance(content, str) else repr(content)
                 if attempt == 0:
                     current = [
-                        {**messages[0], "content": messages[0]["content"] + " Your previous response failed schema validation; obey every required field and limit."},
+                        {**messages[0], "content": messages[0]["content"] + " Your previous response failed schema validation; obey every required field and limit. Return only the raw JSON object, with no prose or Markdown code fences."},
                         messages[1],
                     ]
-        raise ValueError("Structured extractor failed schema validation twice") from last_error
+        raise ValueError(f"Structured extractor failed schema validation twice; last response began with {last_preview!r}") from last_error
     return model
 
 
@@ -117,17 +139,26 @@ def _build_from_trusted_host_export(args: argparse.Namespace, *, model) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     descriptor, export_name = tempfile.mkstemp(prefix=".backfill-export-", suffix=".jsonl", dir=directory)
     export = Path(export_name)
-    os.fchmod(descriptor, 0o600)
+    _wc_fchmod(descriptor, 0o600)
     os.close(descriptor)
-    executable = (home / "hermes-agent" / "hermes").resolve()
-    python = home / "hermes-agent" / "venv" / "bin" / "python"
-    if not executable.is_file() or not python.is_file():
+    if os.name == "nt":
+        # Native Windows: the venv ships a hermes.exe launcher instead of venv/bin/python + repo script.
+        venv_python = Path(os.environ.get("HERMES_PYTHON") or home / "hermes-agent" / "venv" / "Scripts" / "python.exe")
+        executable = venv_python.parent / "hermes.exe"
+        command = [str(executable), "sessions", "export", str(export)]
+        found = executable.is_file()
+    else:
+        executable = (home / "hermes-agent" / "hermes").resolve()
+        python = home / "hermes-agent" / "venv" / "bin" / "python"
+        command = [str(python), str(executable), "sessions", "export", str(export)]
+        found = executable.is_file() and python.is_file()
+    if not found:
         export.unlink(missing_ok=True)
         raise RuntimeError("Managed Hermes runtime was not found")
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
     try:
-        subprocess.run([str(python), str(executable), "sessions", "export", str(export)], check=True, env=environment)
+        subprocess.run(command, check=True, env=environment)
         return build_plan(export, Path(args.plan), model=model, signing_key=plan_key(home, create=True))
     finally:
         export.unlink(missing_ok=True)

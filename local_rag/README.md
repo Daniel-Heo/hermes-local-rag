@@ -4,11 +4,11 @@ User-local `MemoryProvider` for private hybrid recall. It lives outside the Herm
 
 ## Storage and isolation
 
-- Text: `~/.hermes/local-rag/memory.db` (SQLite WAL + FTS5 + local vectors)
-- Curated images: `~/.hermes/local-rag/curated-images.db` and managed `images/` originals.
+- Text: `$HERMES_HOME/local-rag/memory.db` (SQLite WAL + FTS5 + local vectors); `$HERMES_HOME` is `~/.hermes` on Linux/macOS and `%LOCALAPPDATA%\hermes` on Windows
+- Curated images: `$HERMES_HOME/local-rag/curated-images.db` and managed `images/` originals.
 - Legacy `visual.db` is preserved, not automatically promoted into curated recall.
 - Version 1.4.0 shares one private inference daemon per profile, started on demand.
-  See [upgrade and recovery details](https://github.com/condr-at/hermes-local-rag/blob/main/UPGRADE.md).
+  See [upgrade and recovery details](https://github.com/Daniel-Heo/hermes-local-rag/blob/main/UPGRADE.md).
 - Namespace: `<profile>:<platform-user>`, with Desktop/CLI mapped to `<profile>:local`
 - Model weights are shared read-only; records are always filtered by namespace before ranking.
 
@@ -32,7 +32,7 @@ The plugin's **Append Local RAG diagnostics to chat responses** checkbox is off 
 ## Ingestion
 
 - Raw user turns and session summaries are not automatically ingested.
-- `~/.hermes/local-rag/config.json` can set `episodic_ttl_days` and `summary_ttl_days` to positive day counts; `null` means no expiry.
+- `$HERMES_HOME/local-rag/config.json` can set `episodic_ttl_days` and `summary_ttl_days` to positive day counts; `null` means no expiry.
 - Explicit policy-validated atomic memory writes are admitted directly; historical backfill requires review.
 - Approved candidates and built-in Hermes memory writes become durable records.
 - Assistant claims and raw tool output are never promoted as user facts.

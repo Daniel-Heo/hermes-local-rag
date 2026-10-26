@@ -403,7 +403,7 @@ class InferenceClient:
 
 def main():
     parser = argparse.ArgumentParser(description='Foreground private Local RAG inference; Ctrl-C/SIGTERM to stop')
-    parser.add_argument('--home', default=os.environ.get('HERMES_HOME', str(Path.home() / '.hermes')))
+    parser.add_argument('--home', default=_wc.default_hermes_home())
     parser.add_argument('--launch-fd', type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     os.environ.setdefault("HERMES_HOME", str(Path(args.home).expanduser()))

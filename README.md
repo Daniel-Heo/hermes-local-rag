@@ -1,5 +1,11 @@
 # Hermes Local RAG
 
+> **Unofficial multi-OS fork** of [condr-at/hermes-local-rag](https://github.com/condr-at/hermes-local-rag).
+> It adds native Windows support on top of the macOS/Linux upstream (see [Windows](#windows));
+> Linux and macOS keep the upstream POSIX behaviour. This fork is not affiliated with or endorsed
+> by the original author. Report fork issues at
+> [Daniel-Heo/hermes-local-rag](https://github.com/Daniel-Heo/hermes-local-rag/issues).
+
 > **1.6.0:** optional in-chat memory diagnostics, controlled entirely by the Local RAG plugin.
 > Read [CHANGELOG.md](CHANGELOG.md) for changes and limitations, and
 > [UPGRADE.md](UPGRADE.md) for the shared-inference and curated-image migration introduced in 1.4.0.
@@ -25,14 +31,14 @@ Private, fully local hybrid text and visual memory for [Hermes Agent](https://gi
 
 ## Install
 
-Published package: [hermes-local-rag on PyPI](https://pypi.org/project/hermes-local-rag/)
+The upstream package on [PyPI](https://pypi.org/project/hermes-local-rag/) does not include this fork's Windows support. Install the fork from GitHub instead.
 
 For packaged-provider discovery, install it into the same Python environment that runs Hermes:
 
 > Upgrading from 1.3.2 or older: stop every Hermes Desktop and gateway process first. Version 1.4.0 performs a one-time, integrity-checked migration from `memory.sqlite` / `visual.sqlite` to backup-safe `.db` files and removes the legacy files after success.
 
 ```bash
-python -m pip install hermes-local-rag==1.6.0
+python -m pip install "hermes-local-rag @ git+https://github.com/Daniel-Heo/hermes-local-rag"
 hermes config set memory.provider local_rag
 ```
 
@@ -43,7 +49,7 @@ The package exposes `local_rag -> local_rag:register` through the official `herm
 Prerequisite: an existing Hermes Agent installation.
 
 1. Open **Hermes Dashboard → Plugins → Install**.
-2. Install `condr-at/hermes-local-rag/local_rag`.
+2. Install `Daniel-Heo/hermes-local-rag/local_rag`.
 3. Open the new **Local RAG** tab.
 4. Click **Install dependencies**.
 5. Open and accept the required Gemma Terms, create a read-only Hugging Face token, paste it into the password field, and click **Sign in**.
@@ -69,7 +75,7 @@ It never deletes `$HERMES_HOME/local-rag`, where indexes and configuration live.
 The technical installer remains available for development and recovery:
 
 ```bash
-git clone https://github.com/condr-at/hermes-local-rag.git
+git clone https://github.com/Daniel-Heo/hermes-local-rag.git
 cd hermes-local-rag
 python3 install.py
 ```
@@ -80,11 +86,24 @@ Verify after installation or a Hermes update:
 python3 install.py --check
 ```
 
+On Windows, use `python` (or `py`) instead of `python3`.
+
 Then restart the gateway, or start a new Desktop session.
+
+## Windows
+
+Native Windows Hermes runs its core on a bundled runtime, separate from the venv that holds Local RAG's heavy dependencies. The fork handles this split:
+
+- `$HERMES_HOME` defaults to `%LOCALAPPDATA%\hermes`; models, indexes and configuration live under it.
+- Set `HERMES_PYTHON` to the venv interpreter, normally `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe`. The setup wizard and `install.py` install dependencies there, and the embedding service runs there as a child process. The Hermes core runtime does not need these packages, so a Hermes update that replaces it does not disable the provider.
+- The local inference service listens on `127.0.0.1` (TCP) instead of a Unix socket; requests are still authenticated with the existing random token file.
+- POSIX permission bits and checks (`0600` files, private directories) are skipped; private files rely on the user profile's access control.
+- Image OCR needs [Tesseract](https://github.com/tesseract-ocr/tesseract) on `PATH` (also on Linux); the Swift OCR fallback is macOS-only.
+- The `hermes local_rag` backfill CLI has not been verified on Windows.
 
 ## Configuration
 
-`~/.hermes/local-rag/config.json`:
+`$HERMES_HOME/local-rag/config.json` (`~/.hermes` on Linux/macOS, `%LOCALAPPDATA%\hermes` on Windows):
 
 ```json
 {
@@ -105,7 +124,7 @@ No extra LLM runs, application changes, transcript indexing, or separate diagnos
 
 ## Backfill
 
-Raw transcript backfill is disabled. Historical sessions pass through role filtering, credential and prompt-injection rejection, bounded structured extraction, and strict validation. Preview writes only a mode-`0600` review artifact; every candidate starts rejected, and only explicitly accepted items can be applied. Namespace, project, session, timestamps, and source-message provenance come from the trusted export rather than the model.
+Raw transcript backfill is disabled. Historical sessions pass through role filtering, credential and prompt-injection rejection, bounded structured extraction, and strict validation. Preview writes only a mode-`0600` review artifact (on Windows, protected by the user profile's access control instead); every candidate starts rejected, and only explicitly accepted items can be applied. Namespace, project, session, timestamps, and source-message provenance come from the trusted export rather than the model.
 
 The Dashboard owns the normal preview → edit/accept → apply flow. The equivalent recovery CLI is:
 

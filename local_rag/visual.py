@@ -8,12 +8,14 @@ import onnxruntime as ort
 from PIL import Image, ImageOps
 from tokenizers import Tokenizer
 
+from ._wincompat import default_hermes_home
+
 
 class ClipOnnxEmbedder:
     dimensions = 512
 
     def __init__(self, model_dir: Path | None = None) -> None:
-        root = model_dir or Path.home() / ".hermes" / "models" / "clip-onnx"
+        root = model_dir or Path(default_hermes_home()).expanduser() / "models" / "clip-onnx"
         self._tokenizer = Tokenizer.from_file(str(root / "tokenizer.json"))
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
@@ -55,9 +57,8 @@ _shared_lock = threading.Lock()
 
 
 def get_shared_visual_embedder():
-    import os
     from .inference import InferenceClient
-    home = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser().resolve()
+    home = Path(default_hermes_home()).expanduser().resolve()
     with _shared_lock:
         if home not in _shared:
             _shared[home] = InferenceClient(home)

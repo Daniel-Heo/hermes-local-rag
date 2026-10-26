@@ -29,6 +29,7 @@ _PLUGIN_PARENT = str(Path(__file__).resolve().parents[2])
 if _PLUGIN_PARENT not in sys.path:
     sys.path.insert(0, _PLUGIN_PARENT)
 
+from local_rag._wincompat import default_hermes_home
 from local_rag.backfill import plan_key, validate_plan_payload
 from local_rag.database import canonical_database_path
 from local_rag.policy import IngestDecision, classify_text
@@ -51,7 +52,7 @@ DEPENDENCIES = ["numpy>=2.0,<3", "tokenizers>=0.22,<1", "Pillow>=11,<13", "onnxr
 
 
 def _home() -> Path:
-    return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")).expanduser().resolve()
+    return Path(default_hermes_home()).expanduser().resolve()
 
 
 def _python() -> Path:

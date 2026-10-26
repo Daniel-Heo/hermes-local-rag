@@ -17,8 +17,8 @@ def default_model_dir() -> Path:
     configured = os.environ.get("HERMES_EMBEDDINGGEMMA_DIR")
     if configured:
         return Path(configured).expanduser()
-    # Follow HERMES_HOME like the dashboard downloader does (it is not ~/.hermes on native Windows).
-    return Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser() / "models" / "embeddinggemma-litert"
+    from ._wincompat import default_hermes_home
+    return Path(default_hermes_home()).expanduser() / "models" / "embeddinggemma-litert"
 
 
 def default_model_path() -> Path:
@@ -59,8 +59,9 @@ class LiteRTEmbeddingGemma:
 
 def get_shared_embedder(dimensions: int = 512):
     """Compatibility factory: only the service may own resident model instances."""
+    from ._wincompat import default_hermes_home
     from .inference import InferenceClient
-    home = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser().resolve()
+    home = Path(default_hermes_home()).expanduser().resolve()
     key = (str(home), dimensions)
     with _shared_lock:
         if key not in _shared_embedders:

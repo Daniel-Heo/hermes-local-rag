@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -29,16 +30,36 @@ def run(command: list[str], **kwargs) -> None:
     subprocess.run(command, check=True, **kwargs)
 
 
+def default_home() -> str:
+    configured = os.environ.get("HERMES_HOME")
+    if configured:
+        return configured
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        # Native Windows Hermes lives in %LOCALAPPDATA%\hermes, not ~/.hermes.
+        return str(Path(os.environ["LOCALAPPDATA"]) / "hermes")
+    return str(Path.home() / ".hermes")
+
+
+def visual_enabled(home: Path) -> bool:
+    """Same source of truth as the Dashboard: visual models are optional unless enabled."""
+    path = home / "local-rag" / "config.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("visual_enabled") is True
+    except FileNotFoundError:
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install Hermes Local RAG without touching the Hermes checkout")
-    parser.add_argument("--home", default=os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    parser.add_argument("--home", default=default_home())
     parser.add_argument("--skip-models", action="store_true", help="Install code and dependencies without downloading model artifacts")
     parser.add_argument("--check", action="store_true", help="Only verify an existing installation")
     args = parser.parse_args()
 
     home = Path(args.home).expanduser().resolve()
     checkout = home / "hermes-agent"
-    python = Path(os.environ.get("HERMES_PYTHON", checkout / "venv" / "bin" / "python"))
+    venv_python = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+    python = Path(os.environ.get("HERMES_PYTHON", checkout / "venv" / venv_python[0] / venv_python[1]))
     hermes = shutil.which("hermes")
     if not python.is_file() or not hermes:
         raise SystemExit("Hermes installation not found. Install Hermes Agent first or set HERMES_HOME/HERMES_PYTHON.")
@@ -46,13 +67,15 @@ def main() -> int:
     plugin_target = home / "plugins" / "local_rag"
     text_target = home / "models" / "embeddinggemma-litert"
     visual_target = home / "models" / "clip-onnx"
-    required = [plugin_target / "plugin.yaml", text_target / TEXT_FILES[0], visual_target / VISUAL_FILES[0], visual_target / VISUAL_FILES[1]]
+    required = [plugin_target / "plugin.yaml", text_target / TEXT_FILES[0]]
     if args.check:
+        if visual_enabled(home):
+            required += [visual_target / VISUAL_FILES[0], visual_target / VISUAL_FILES[1]]
         missing = [str(path) for path in required if not path.exists()]
         run([hermes, "memory", "status"])
         if missing:
             raise SystemExit("Missing installation artifacts:\n" + "\n".join(missing))
-        env = {**os.environ, "PYTHONPATH": str(home / "plugins")}
+        env = {**os.environ, "PYTHONPATH": str(home / "plugins"), "HERMES_HOME": str(home)}
         run([str(python), "-c", "from local_rag import LocalRagProvider; assert LocalRagProvider().is_available()"], env=env)
         print("Hermes Local RAG installation is healthy.")
         return 0
@@ -74,7 +97,7 @@ def main() -> int:
     temporary.replace(plugin_target)
 
     if not args.skip_models:
-        hf = python.parent / "hf"
+        hf = python.parent / ("hf.exe" if os.name == "nt" else "hf")
         if not hf.is_file():
             raise SystemExit("Hugging Face CLI was not installed into the Hermes venv")
         text_target.mkdir(parents=True, exist_ok=True)

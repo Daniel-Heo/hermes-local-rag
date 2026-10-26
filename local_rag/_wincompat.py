@@ -128,6 +128,16 @@ def connect_socket(socket_path: Path, timeout: float) -> socket.socket:
         raise ConnectionRefusedError("Inference service did not accept the connection") from None
 
 
+def default_hermes_home() -> str:
+    """HERMES_HOME, else the platform default (%LOCALAPPDATA%\\hermes on Windows, ~/.hermes elsewhere)."""
+    configured = os.environ.get("HERMES_HOME")
+    if configured:
+        return configured
+    if IS_WINDOWS and os.environ.get("LOCALAPPDATA"):
+        return os.path.join(os.environ["LOCALAPPDATA"], "hermes")
+    return os.path.join(os.path.expanduser("~"), ".hermes")
+
+
 def inference_python() -> str:
     """Interpreter for the inference child.
 
@@ -136,7 +146,7 @@ def inference_python() -> str:
     """
     if IS_WINDOWS:
         candidates = [os.environ.get("HERMES_PYTHON")]
-        home = os.environ.get("HERMES_HOME") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes")
+        home = default_hermes_home()
         candidates.append(os.path.join(home, "hermes-agent", "venv", "Scripts", "python.exe"))
         for candidate in candidates:
             if candidate and Path(candidate).is_file():

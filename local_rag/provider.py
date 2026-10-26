@@ -50,7 +50,7 @@ def _inference_ready() -> bool:
 
     configured = os.environ.get("HERMES_EMBEDDINGGEMMA_DIR")
     model_dir = (Path(configured).expanduser() if configured
-                 else Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser() / "models" / "embeddinggemma-litert")
+                 else Path(_wc.default_hermes_home()).expanduser() / "models" / "embeddinggemma-litert")
     if not (model_dir / "embeddinggemma-300M_seq512_mixed-precision.tflite").is_file():
         return False
     try:

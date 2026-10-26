@@ -1,6 +1,6 @@
 # local_rag windows patch v1
 from __future__ import annotations
-from ._wincompat import fchmod as _wc_fchmod, getuid as _wc_getuid, O_NOFOLLOW as _WC_O_NOFOLLOW, O_NONBLOCK as _WC_O_NONBLOCK
+from ._wincompat import default_hermes_home as _wc_default_hermes_home, fchmod as _wc_fchmod, getuid as _wc_getuid, O_NOFOLLOW as _WC_O_NOFOLLOW, O_NONBLOCK as _WC_O_NONBLOCK
 
 import argparse
 import json
@@ -50,10 +50,10 @@ def register_backfill_cli(parser: argparse.ArgumentParser) -> None:
     sub = parser.add_subparsers(dest="backfill_command", required=True)
     preview = sub.add_parser("preview", help="Extract a review plan without writing memory")
     preview.add_argument("--plan", required=True)
-    preview.add_argument("--home", default=os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    preview.add_argument("--home", default=_wc_default_hermes_home())
     apply = sub.add_parser("apply", help="Apply only explicitly accepted review items")
     apply.add_argument("--plan", required=True)
-    apply.add_argument("--home", default=os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    apply.add_argument("--home", default=_wc_default_hermes_home())
 
 
 def _structured_model(llm):
@@ -200,7 +200,7 @@ def backfill_main() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="local-rag", description="Inspect and maintain Hermes local RAG")
-    parser.add_argument("--home", default=os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    parser.add_argument("--home", default=_wc_default_hermes_home())
     parser.add_argument("--namespace", default="default:local")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")

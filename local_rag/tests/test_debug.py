@@ -46,7 +46,7 @@ def save(provider, text='The project uses Python for indexing.'):
 
 def finish(manager, session='debug-session'):
     from hermes_cli.lifecycle import invoke_hook
-    return invoke_hook('transform_llm_output', response_text='Ответ.', session_id=session)
+    return invoke_hook('transform_llm_output', response_text='Answer.', session_id=session)
 
 
 def test_real_memory_loader_connects_to_native_output_hook(native_provider):
@@ -54,7 +54,7 @@ def test_real_memory_loader_connects_to_native_output_hook(native_provider):
     provider.on_turn_start(1, 'Not retained by debug')
     assert save(provider)['stored']
     results = finish(manager)
-    assert any('диагностика' in text and 'Python' in text for text in results)
+    assert any('diagnostics' in text and 'Python' in text for text in results)
 
 
 def test_off_turn_does_not_capture_or_claim_output(native_provider):
@@ -79,12 +79,12 @@ def test_correction_and_forget_report_confirmed_actions_without_repeating_forgot
         'new_text': 'The project uses Rust for indexing.', 'subject': 'indexing', 'durability': 'stable',
     })
     assert json.loads(update)['updated']
-    assert 'Исправлено' in finish(manager)[0]
+    assert 'Corrected' in finish(manager)[0]
     provider.on_turn_start(3, '')
     provider.prefetch('Rust')
     assert json.loads(provider.handle_tool_call('local_rag_forget', {'id': item['id']}))['removed']
     output = finish(manager)[0]
-    assert 'Удалено' in output
+    assert 'Deleted' in output
     assert 'Rust' not in output
     assert provider._store.count(provider._namespace) == 0
 
@@ -97,12 +97,12 @@ def test_trace_is_bounded_and_cannot_escape_markup():
     for _ in range(500):
         turns.change('s', 'A' * 2000, 'project')
         turns.failure('s', 'B' * 2000)
-    output = turns.append('s', 'Ответ.', enabled=True)
+    output = turns.append('s', 'Answer.', enabled=True)
     assert len(output) < 6500
     assert '</details>' not in output
-    assert output.count('**Local RAG: диагностика**') == 1
+    assert output.count('**Local RAG: diagnostics**') == 1
     assert '<img' not in output
-    assert 'сокращ' in output
+    assert 'truncated' in output
 
 
 def test_diagnostics_re_screen_legacy_recall_and_explicit_search_credentials():
@@ -111,14 +111,14 @@ def test_diagnostics_re_screen_legacy_recall_and_explicit_search_credentials():
     secret = 'synthetic-opaque-credential'
     turns.start('recall')
     turns.recall('recall', f'ordinary record\nAuthorization:\nBearer {secret}')
-    recall_output = turns.append('recall', 'Ответ.', enabled=True)
+    recall_output = turns.append('recall', 'Answer.', enabled=True)
     assert secret not in recall_output
-    assert 'скрыт фильтром безопасности' in recall_output
+    assert 'hidden by safety filter' in recall_output
     turns.start('search')
     turns.search('search', [{'id': 1, 'text': f'Authorization: Bearer {secret}'}])
-    search_output = turns.append('search', 'Ответ.', enabled=True)
+    search_output = turns.append('search', 'Answer.', enabled=True)
     assert secret not in search_output
-    assert 'содержимое скрыто фильтром безопасности' in search_output
+    assert 'content hidden by safety filter' in search_output
 
 
 def test_ambiguous_index_outcomes_do_not_claim_a_save():
@@ -127,10 +127,10 @@ def test_ambiguous_index_outcomes_do_not_claim_a_save():
     provider._debug.start('s')
     provider._trace_other_tool('local_rag_index_file', {}, {'chunks': 0}, 's')
     provider._trace_other_tool('local_rag_index_image', {'scope': 'project'}, {'id': 7}, 's')
-    output = provider._debug.append('s', 'Ответ.', enabled=True)
-    assert 'Наблюдаемые результаты' in output
-    assert 'Сохранений нет' not in output
-    assert 'Изображение сохранено' not in output
+    output = provider._debug.append('s', 'Answer.', enabled=True)
+    assert 'Observed results' in output
+    assert 'No saves' not in output
+    assert 'Image saved' not in output
 
 
 def test_explicit_search_and_document_import_are_visible(native_provider):
@@ -140,12 +140,12 @@ def test_explicit_search_and_document_import_are_visible(native_provider):
     provider.on_turn_start(1, '')
     result = json.loads(provider.handle_tool_call('local_rag_index_file', {'path': str(path)}))
     assert result['chunks'] > 0
-    assert 'Проиндексировано' in finish(manager)[0]
+    assert 'Indexed' in finish(manager)[0]
     provider.on_turn_start(2, '')
     result = json.loads(provider.handle_tool_call('local_rag_search', {'query': 'Cedar Tuesday'}))
     assert result['results']
     output = finish(manager)[0]
-    assert 'Явный поиск' in output and 'Tuesday' in output
+    assert 'Explicit search' in output and 'Tuesday' in output
 
 
 def test_failure_does_not_echo_exception_and_is_not_a_rejection(native_provider, monkeypatch):
@@ -156,8 +156,8 @@ def test_failure_does_not_echo_exception_and_is_not_a_rejection(native_provider,
     monkeypatch.setattr(provider._embedder, 'embed_document', fail)
     assert 'error' in save(provider)
     output = finish(manager)[0]
-    assert 'Сбой' in output and 'private exception material' not in output
-    assert 'Сохранено:' not in output
+    assert 'fail' in output and 'private exception material' not in output
+    assert 'Saved:' not in output
 
 
 def test_foreign_profile_session_and_completed_turn_do_not_get_trace(native_provider, tmp_path):
@@ -185,7 +185,7 @@ def test_hot_toggle_does_not_reload_model_settings(native_provider):
     LocalRagConfig(debug_enabled=True, embedding_dimensions=768).save(home)
     provider.on_turn_start(1, '')
     assert provider._config.embedding_dimensions == before
-    assert 'Сохранений нет' in finish(manager)[0]
+    assert 'No saves' in finish(manager)[0]
 
 
 def test_builtin_mirror_writes_are_not_reported_as_no_save(native_provider):
@@ -194,5 +194,5 @@ def test_builtin_mirror_writes_are_not_reported_as_no_save(native_provider):
     provider.on_memory_write('add', 'user', 'The user prefers concise technical explanations.')
     assert provider._store.count(provider._namespace) == 1
     output = finish(manager)[0]
-    assert 'Зеркало Markdown' in output
-    assert 'Сохранений нет' not in output
+    assert 'Markdown mirror' in output
+    assert 'No saves' not in output

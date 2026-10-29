@@ -214,7 +214,7 @@ class LocalRagProvider(MemoryProvider):
                 text += "\nLocal RAG degraded: " + "; ".join(self._retrieval_warnings)
             self._debug.recall(self._debug_key(active_session_id), text)
             for warning in self._retrieval_warnings:
-                self._debug.failure(self._debug_key(self._session_id), f"Сбой предвыборки: {warning}", attempted_write=False)
+                self._debug.failure(self._debug_key(self._session_id), f"Prefetch failure: {warning}", attempted_write=False)
             return text
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs: Any) -> None:
@@ -344,13 +344,13 @@ class LocalRagProvider(MemoryProvider):
         if action in {"remove", "replace"}:
             removed = self._store.delete_source_containing(self._namespace, source, old_text)
             if removed:
-                self._debug.forgotten(key, removed, kind="записей зеркала Markdown удалено:")
+                self._debug.forgotten(key, removed, kind="Markdown mirror records deleted:")
         if action == "remove":
             return
         if action not in {"add", "replace"}:
             return
         if classify_text(content) is not IngestDecision.INDEX:
-            self._debug.failure(key, "Зеркало Markdown отклонено фильтром безопасности")
+            self._debug.failure(key, "Markdown mirror rejected by safety filter")
             return
         stored = self._store.add(
             self._namespace, content, self._embedder.embed_document(content),
@@ -358,9 +358,9 @@ class LocalRagProvider(MemoryProvider):
             metadata=metadata,
         )
         if stored:
-            self._debug.change(key, content, "Markdown", action="Зеркало Markdown сохранено")
+            self._debug.change(key, content, "Markdown", action="Markdown mirror saved")
         else:
-            self._debug.failure(key, "Зеркало Markdown не добавлено: дубликат или ограничение")
+            self._debug.failure(key, "Markdown mirror not added: duplicate or limit")
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         def schema(name: str, description: str, properties: dict | None = None, required: list[str] | None = None, *, strict: bool = False) -> dict:
@@ -431,27 +431,27 @@ class LocalRagProvider(MemoryProvider):
                 self._debug.failure(key, warning, attempted_write=False)
         elif name == "local_rag_index_file" and "chunks" in result:
             if result["chunks"]:
-                self._debug.change(key, f"фрагментов: {result['chunks']}", "project", action="Проиндексировано")
+                self._debug.change(key, f"chunks: {result['chunks']}", "project", action="Indexed")
             else:
-                self._debug.observation(key, "Индексирование файла завершилось с нулём фрагментов; изменение памяти не определено")
+                self._debug.observation(key, "File indexing produced zero chunks; memory change undetermined")
         elif name == "local_rag_index_image":
             if "id" in result:
-                self._debug.observation(key, f"Получен результат изображения #{result['id']}; создание или существование записи не определено")
+                self._debug.observation(key, f"Received image result #{result['id']}; record creation or existence undetermined")
             elif result.get("decision") == "skip":
-                self._debug.failure(key, "Изображение: агент явно выбрал не сохранять")
+                self._debug.failure(key, "Image: agent explicitly chose not to save")
         elif name in {"local_rag_approve", "local_rag_reject"}:
-            action, field = ("Кандидат принят", "promoted") if name.endswith("approve") else ("Кандидат отклонён", "rejected")
+            action, field = ("Candidate approved", "promoted") if name.endswith("approve") else ("Candidate rejected", "rejected")
             if result.get(field):
-                self._debug.change(key, f"кандидат #{args['id']}", "очередь проверки", action=action)
+                self._debug.change(key, f"candidate #{args['id']}", "review queue", action=action)
             elif field in result:
-                self._debug.failure(key, "Кандидат не изменён")
+                self._debug.failure(key, "Candidate unchanged")
         elif name == "local_rag_forget_image" and "removed" in result:
             if result["removed"]:
-                self._debug.forgotten(key, args["id"], kind="изображение")
+                self._debug.forgotten(key, args["id"], kind="image")
             else:
-                self._debug.failure(key, "Изображение не удалено: доступная запись не найдена")
+                self._debug.failure(key, "Image not deleted: no accessible record found")
         elif name == "local_rag_prune" and result.get("removed"):
-            self._debug.forgotten(key, result['removed'], kind="истёкших записей удалено:")
+            self._debug.forgotten(key, result['removed'], kind="expired records deleted:")
 
     def _handle_tool_call_locked(
         self,
@@ -463,12 +463,12 @@ class LocalRagProvider(MemoryProvider):
     ) -> str:
         debug_key = self._debug_key(active_session_id)
         if not self._store or not self._service or not self._embedder:
-            self._debug.failure(debug_key, "Local RAG не инициализирован")
+            self._debug.failure(debug_key, "Local RAG not initialized")
             return json.dumps({"error": "Local RAG is not initialized"})
         try:
             if tool_name == "local_rag_remember":
                 if not self._write_enabled:
-                    self._debug.failure(debug_key, "запись запрещена для этого контекста агента")
+                    self._debug.failure(debug_key, "write forbidden for this agent context")
                     return json.dumps({"error": "Local RAG writes are disabled in this agent context"})
                 item = validate_memory_item(args)
                 text, subject, durability = item["text"], item["subject"], item["durability"]
@@ -505,17 +505,17 @@ class LocalRagProvider(MemoryProvider):
                 if stored:
                     self._debug.change(debug_key, text, scope)
                 else:
-                    self._debug.failure(debug_key, "Не сохранено: дубликат или ограничение записи; точная причина не сообщена")
+                    self._debug.failure(debug_key, "Not saved: duplicate or write limit; exact reason not reported")
                 return json.dumps({"stored": stored})
             if tool_name == "local_rag_update":
                 if not self._write_enabled:
-                    self._debug.failure(debug_key, "запись запрещена для этого контекста агента")
+                    self._debug.failure(debug_key, "write forbidden for this agent context")
                     return json.dumps({"error": "Local RAG writes are disabled in this agent context"})
                 if args.keys() - {"id", "expected_text", "new_text", "subject", "durability", "importance", "confidence", "tags"}:
                     raise ValueError("Unknown atomic-update fields")
                 if type(args.get("id")) is not int or not 1 <= args["id"] <= 2**63 - 1:
                     raise ValueError("Memory ID must be an integer from 1 to 9223372036854775807")
-                scope = "неизвестно"
+                scope = "unknown"
                 snapshot = self._store.memory_item_for_update(
                     self._namespace, args["id"], project=self._project, session_id=active_session_id,
                 ) if self._config.debug_enabled else None
@@ -530,13 +530,13 @@ class LocalRagProvider(MemoryProvider):
                         **{key: value for key, value in args.items() if key not in {"id", "expected_text", "new_text"}},
                     )
                 except (RuntimeError, OSError, sqlite3.Error):
-                    self._debug.failure(debug_key, "Сбой атомарного обновления; изменение не сохранено")
+                    self._debug.failure(debug_key, "Atomic update failed; change not saved")
                     return json.dumps({"error": "Atomic memory update failed; no change was saved"})
                 if result.get("updated"):
-                    self._debug.change(debug_key, args.get("new_text", ""), scope, action="Исправлено")
+                    self._debug.change(debug_key, args.get("new_text", ""), scope, action="Corrected")
                 else:
-                    reasons = {"conflict": "конфликт версии", "unavailable": "запись недоступна", "blocked": "фильтр безопасности"}
-                    self._debug.failure(debug_key, f"Исправление отклонено: {reasons.get(str(result.get('reason')), 'изменение не подтверждено')}")
+                    reasons = {"conflict": "version conflict", "unavailable": "record unavailable", "blocked": "safety filter"}
+                    self._debug.failure(debug_key, f"Correction rejected: {reasons.get(str(result.get('reason')), 'change not confirmed')}")
                 return json.dumps(result)
             if tool_name == "local_rag_search":
                 results = self._unified_search(str(args.get("query") or ""), limit=max(1, min(20, int(args.get("limit", 5)))))
@@ -545,7 +545,7 @@ class LocalRagProvider(MemoryProvider):
                 return json.dumps({"entries": self._store.count(self._namespace), "images": self._images.count(self._namespace) if self._images else 0, "pending_review": len(self._store.list_candidates(self._namespace))})
             if tool_name == "local_rag_forget":
                 if not self._write_enabled:
-                    self._debug.failure(debug_key, "удаление запрещено для этого контекста агента")
+                    self._debug.failure(debug_key, "delete forbidden for this agent context")
                     return json.dumps({"error": "Local RAG writes are disabled in this agent context"})
                 if args.keys() - {"id"}:
                     raise ValueError("Unknown forget fields")
@@ -558,10 +558,10 @@ class LocalRagProvider(MemoryProvider):
                     if removed:
                         self._debug.forgotten(debug_key, args["id"])
                     else:
-                        self._debug.failure(debug_key, "удаление: доступная запись не найдена")
+                        self._debug.failure(debug_key, "delete: no accessible record found")
                     return json.dumps({"removed": removed})
                 except sqlite3.Error:
-                    self._debug.failure(debug_key, "Сбой удаления; изменение не подтверждено")
+                    self._debug.failure(debug_key, "Delete failed; change not confirmed")
                     return json.dumps({"error": "Memory deletion failed"})
             if tool_name == "local_rag_review":
                 return json.dumps({"candidates": self._store.list_candidates(self._namespace)}, ensure_ascii=False)
@@ -598,7 +598,7 @@ class LocalRagProvider(MemoryProvider):
             if tool_name == "local_rag_prune":
                 return json.dumps({"removed": self._store.prune(self._namespace)})
         except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
-            label = "Отклонено: недопустимые аргументы" if isinstance(exc, (KeyError, TypeError, ValueError)) else "Сбой операции памяти"
+            label = "Rejected: invalid arguments" if isinstance(exc, (KeyError, TypeError, ValueError)) else "Memory operation failed"
             self._debug.failure(debug_key, label, attempted_write=tool_name not in {"local_rag_search", "local_rag_search_images", "local_rag_status", "local_rag_review"})
             return json.dumps({"error": str(exc)})
         return json.dumps({"error": f"Unknown tool: {tool_name}"})

@@ -66,19 +66,19 @@ class DebugTurns:
                 # Stored legacy records predate current ingest policy.  Check the
                 # complete payload before line splitting or excerpt truncation.
                 if classify_text(rendered) is IngestDecision.BLOCK:
-                    turn.recall = "Контекст скрыт фильтром безопасности."
+                    turn.recall = "Context hidden by safety filter."
                     return
                 lines = ["> " + _safe(line, 600) for line in rendered.splitlines() if line.strip()]
                 safe = "\n".join(lines)
                 turn.recall = safe[:_LIMIT]
                 turn.truncated |= len(safe) > _LIMIT
 
-    def change(self, key: str, fact: object, scope: object, *, action: str = "Сохранено") -> None:
+    def change(self, key: str, fact: object, scope: object, *, action: str = "Saved") -> None:
         with self._lock:
             turn = self._turns.get(key)
             if turn:
                 turn.attempted_save = True
-                turn.add(turn.changes, f"• {action}: {_safe(fact)} — область: {_safe(scope, 80)}")
+                turn.add(turn.changes, f"• {action}: {_safe(fact)} — scope: {_safe(scope, 80)}")
 
     def search(self, key: str, results: list[dict]) -> None:
         with self._lock:
@@ -86,23 +86,23 @@ class DebugTurns:
             if turn:
                 lines = []
                 for item in results[:5]:
-                    excerpt = item.get('text') or item.get('description') or 'изображение; пиксели не проверены'
+                    excerpt = item.get('text') or item.get('description') or 'image; pixels not inspected'
                     if classify_text(str(excerpt)) is IngestDecision.BLOCK:
-                        excerpt = 'содержимое скрыто фильтром безопасности'
+                        excerpt = 'content hidden by safety filter'
                     lines.append(f"• #{_safe(item.get('id', '?'), 30)}: {_safe(excerpt)}")
-                text = '\n'.join(lines) if lines else 'Совпадений нет.'
+                text = '\n'.join(lines) if lines else 'No matches.'
                 turn.search = text[:900]
                 turn.truncated |= len(text) > 900 or len(results) > 5
 
-    def forgotten(self, key: str, memory_id: int | str, *, kind: str = "запись") -> None:
+    def forgotten(self, key: str, memory_id: int | str, *, kind: str = "record") -> None:
         with self._lock:
             turn = self._turns.get(key)
             if turn:
                 # Do not create a fresh chat copy of forgotten data.
-                turn.recall = "Контекст скрыт после удаления записи."
+                turn.recall = "Context hidden after record deletion."
                 turn.search = ""
                 turn.changes.clear()
-                self.change(key, f"{kind} #{memory_id}", "текущая доступная область", action="Удалено")
+                self.change(key, f"{kind} #{memory_id}", "current accessible scope", action="Deleted")
 
     def failure(self, key: str, label: str, *, attempted_write: bool = True) -> None:
         with self._lock:
@@ -123,23 +123,23 @@ class DebugTurns:
             turn = self._turns.pop(key, None)
         if not enabled or turn is None:
             return response
-        parts = ["**Local RAG: диагностика**"]
+        parts = ["**Local RAG: diagnostics**"]
         if turn.recall:
-            parts += ["\nПолученный контекст:", turn.recall]
+            parts += ["\nRetrieved context:", turn.recall]
         else:
-            parts.append("\nПолученный контекст: нет.")
+            parts.append("\nRetrieved context: none.")
         if turn.search:
-            parts += ["\nЯвный поиск — передано агенту:", turn.search]
+            parts += ["\nExplicit search — passed to agent:", turn.search]
         if turn.changes:
-            parts += ["\nИзменения памяти:", *turn.changes]
+            parts += ["\nMemory changes:", *turn.changes]
         if turn.observations:
-            parts += ["\nНаблюдаемые результаты:", *turn.observations]
+            parts += ["\nObserved results:", *turn.observations]
         if not turn.changes and not turn.observations and turn.attempted_save:
-            parts.append("\nСохранений нет: операция не изменила память.")
+            parts.append("\nNo saves: the operation did not change memory.")
         elif not turn.changes and not turn.observations:
-            parts.append("\nСохранений нет: Local RAG не получил успешной операции записи.")
+            parts.append("\nNo saves: Local RAG received no successful write operation.")
         if turn.failures:
-            parts += ["\nОтклонения/сбои:", *turn.failures]
+            parts += ["\nRejections/failures:", *turn.failures]
         if turn.truncated:
-            parts.append("\nДиагностика показана сокращённо.")
+            parts.append("\nDiagnostics truncated.")
         return response.rstrip() + "\n\n---\n\n" + "\n".join(parts)

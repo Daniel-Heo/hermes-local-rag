@@ -352,7 +352,8 @@ class InferenceClient:
                         log.truncate()
                         env = dict(os.environ)
                         env.pop('PYTHONPATH', None)
-                        env['HERMES_HOME'] = str(self.home)  # the daemon uses its own home's models/cache, not the launching profile's
+                        if os.environ.get('LOCAL_RAG_INFERENCE_HOME'):  # shared daemon only: use that home's models/cache
+                            env['HERMES_HOME'] = str(self.home)
                         child = subprocess.Popen(
                             [_wc.detached_interpreter(_wc.inference_python(), env), '-m', 'local_rag.inference', '--home', str(self.home),
                              *_wc.launch_fd_args(launch.fileno())],

@@ -255,3 +255,13 @@ def test_standalone_service_subprocess_singleton_and_shutdown(home):
         process.wait(timeout=10)
     assert process.returncode == 0
     assert not (home / 'local-rag/.cache/i.sock').exists()
+
+
+def test_inference_home_override_shares_daemon_directory(tmp_path, monkeypatch):
+    from local_rag.inference import InferenceClient
+    shared = tmp_path / "shared"
+    monkeypatch.setenv("LOCAL_RAG_INFERENCE_HOME", str(shared))
+    client = InferenceClient(tmp_path / "profile")
+    assert client.directory == shared.resolve() / "local-rag" / ".cache"
+    monkeypatch.delenv("LOCAL_RAG_INFERENCE_HOME")
+    assert InferenceClient(tmp_path / "profile").directory == (tmp_path / "profile").resolve() / "local-rag" / ".cache"

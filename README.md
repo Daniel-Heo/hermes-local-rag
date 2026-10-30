@@ -95,7 +95,7 @@ Then restart the gateway, or start a new Desktop session.
 Native Windows Hermes runs its core on a bundled runtime, separate from the venv that holds Local RAG's heavy dependencies. The fork handles this split:
 
 - `$HERMES_HOME` defaults to `%LOCALAPPDATA%\hermes`; models, indexes and configuration live under it.
-- Several Hermes profiles can share one embedding daemon: set `LOCAL_RAG_INFERENCE_HOME` (the home whose `models` and inference service to use) and `HERMES_EMBEDDINGGEMMA_DIR` in the extra profile's `.env`. Each profile keeps its own memory database under its own `$HERMES_HOME/local-rag`; restart the Hermes gateway after changing them.
+- All Hermes profiles share one embedding daemon and the models of the root Hermes home (a profile home `<root>\profiles\<name>` maps to `<root>`); each profile keeps its own memory database under its own `$HERMES_HOME/local-rag`. Set `LOCAL_RAG_INFERENCE_HOME` to point every profile at a different shared home. Restart the Hermes gateway after changing it.
 - Set `HERMES_PYTHON` to the venv interpreter, normally `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe`. The setup wizard and `install.py` install dependencies there, and the embedding service runs there as a child process. The Hermes core runtime does not need these packages, so a Hermes update that replaces it does not disable the provider.
 - The local inference service listens on `127.0.0.1` (TCP) instead of a Unix socket; requests are still authenticated with the existing random token file.
 - POSIX permission bits and checks (`0600` files, private directories) are skipped; private files rely on the user profile's access control.

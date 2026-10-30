@@ -210,6 +210,19 @@ def default_hermes_home() -> str:
     return os.path.join(os.path.expanduser("~"), ".hermes")
 
 
+def shared_inference_home(home) -> Path:
+    """Home whose inference service and models every Hermes profile shares.
+
+    Embedding is stateless, so one daemon serves all profiles; memory databases stay per profile.
+    LOCAL_RAG_INFERENCE_HOME wins; a profile home (<root>/profiles/<name>) maps to <root>.
+    """
+    configured = os.environ.get("LOCAL_RAG_INFERENCE_HOME")
+    path = Path(configured or home).expanduser().resolve()
+    if not configured and path.parent.name == "profiles":
+        return path.parent.parent
+    return path
+
+
 def inference_python() -> str:
     """Interpreter for the inference child.
 

@@ -258,9 +258,8 @@ def _private_file(path, *, unshared=False):
 
 class InferenceClient:
     def __init__(self, home, *, dimensions=512, timeout: float = 30, startup_timeout: float = 10):
-        # Embedding inference is stateless, so several Hermes profiles may share one daemon
-        # (LOCAL_RAG_INFERENCE_HOME); each profile keeps its own memory database.
-        self.home = Path(os.environ.get("LOCAL_RAG_INFERENCE_HOME") or home).expanduser().resolve()
+        # One daemon for every profile (see _wincompat.shared_inference_home); memory DBs stay per profile.
+        self.home = _wc.shared_inference_home(home)
         self.directory = self.home / 'local-rag' / '.cache'
         self.dimensions = dimensions
         self.timeout = timeout
@@ -352,8 +351,7 @@ class InferenceClient:
                         log.truncate()
                         env = dict(os.environ)
                         env.pop('PYTHONPATH', None)
-                        if os.environ.get('LOCAL_RAG_INFERENCE_HOME'):  # shared daemon only: use that home's models/cache
-                            env['HERMES_HOME'] = str(self.home)
+                        env['HERMES_HOME'] = str(self.home)  # the shared daemon resolves models/cache in its own home
                         child = subprocess.Popen(
                             [_wc.detached_interpreter(_wc.inference_python(), env), '-m', 'local_rag.inference', '--home', str(self.home),
                              *_wc.launch_fd_args(launch.fileno())],

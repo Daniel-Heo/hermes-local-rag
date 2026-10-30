@@ -257,11 +257,13 @@ def test_standalone_service_subprocess_singleton_and_shutdown(home):
     assert not (home / 'local-rag/.cache/i.sock').exists()
 
 
-def test_inference_home_override_shares_daemon_directory(tmp_path, monkeypatch):
+def test_profiles_share_root_inference_home(tmp_path, monkeypatch):
     from local_rag.inference import InferenceClient
+    root = tmp_path / "hermes"
+    monkeypatch.delenv("LOCAL_RAG_INFERENCE_HOME", raising=False)
+    # a profile home maps to the root daemon; a plain home keeps its own
+    assert InferenceClient(root / "profiles" / "lotto").directory == root.resolve() / "local-rag" / ".cache"
+    assert InferenceClient(root).directory == root.resolve() / "local-rag" / ".cache"
     shared = tmp_path / "shared"
     monkeypatch.setenv("LOCAL_RAG_INFERENCE_HOME", str(shared))
-    client = InferenceClient(tmp_path / "profile")
-    assert client.directory == shared.resolve() / "local-rag" / ".cache"
-    monkeypatch.delenv("LOCAL_RAG_INFERENCE_HOME")
-    assert InferenceClient(tmp_path / "profile").directory == (tmp_path / "profile").resolve() / "local-rag" / ".cache"
+    assert InferenceClient(root / "profiles" / "lotto").directory == shared.resolve() / "local-rag" / ".cache"

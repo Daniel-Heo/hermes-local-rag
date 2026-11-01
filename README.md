@@ -1,5 +1,16 @@
 # Hermes Local RAG
 
+<p align="center">
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/Daniel-Heo/hermes-local-rag"></a>
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/pulls"><img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/Daniel-Heo/hermes-local-rag"></a>
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/releases/latest"><img alt="GitHub downloads" src="https://img.shields.io/github/downloads/Daniel-Heo/hermes-local-rag/total?label=downloads(github)"></a>
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/releases/latest"><img alt="GitHub release (latest SemVer)" src="https://img.shields.io/github/v/release/Daniel-Heo/hermes-local-rag"></a>
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/commits/master"><img alt="GitHub commits since latest release (by date)" src="https://img.shields.io/github/commits-since/Daniel-Heo/hermes-local-rag/latest"></a><br>
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/Daniel-Heo/hermes-local-rag?style=social"></a>
+    <a href="https://github.com/Daniel-Heo/hermes-local-rag/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/Daniel-Heo/hermes-local-rag?style=social"></a>
+	<a href="https://deepwiki.com/Daniel-Heo/hermes-local-rag"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+</p>
+
 > **Unofficial multi-OS fork** of [condr-at/hermes-local-rag](https://github.com/condr-at/hermes-local-rag).
 > It adds native Windows support on top of the macOS/Linux upstream (see [Windows](#windows));
 > Linux and macOS keep the upstream POSIX behaviour. This fork is not affiliated with or endorsed

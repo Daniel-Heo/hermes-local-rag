@@ -17,7 +17,9 @@
 > by the original author. Report fork issues at
 > [Daniel-Heo/hermes-local-rag](https://github.com/Daniel-Heo/hermes-local-rag/issues).
 
-> **1.6.0:** optional in-chat memory diagnostics, controlled entirely by the Local RAG plugin.
+> **1.6.0+multios.1:** native Windows support, and one embedding daemon shared by all Hermes profiles
+> (see [Shared embedding daemon](#shared-embedding-daemon)). Built on upstream **1.6.0**: optional
+> in-chat memory diagnostics, controlled entirely by the Local RAG plugin.
 > Read [CHANGELOG.md](CHANGELOG.md) for changes and limitations, and
 > [UPGRADE.md](UPGRADE.md) for the shared-inference and curated-image migration introduced in 1.4.0.
 > See the [synthetic benchmark and its limitations](evaluation/README.md).
@@ -49,9 +51,11 @@ For packaged-provider discovery, install it into the same Python environment tha
 > Upgrading from 1.3.2 or older: stop every Hermes Desktop and gateway process first. Version 1.4.0 performs a one-time, integrity-checked migration from `memory.sqlite` / `visual.sqlite` to backup-safe `.db` files and removes the legacy files after success.
 
 ```bash
-python -m pip install "hermes-local-rag @ git+https://github.com/Daniel-Heo/hermes-local-rag"
+python -m pip install "hermes-local-rag @ git+https://github.com/Daniel-Heo/hermes-local-rag@v1.6.0+multios.1"
 hermes config set memory.provider local_rag
 ```
+
+Drop `@v1.6.0+multios.1` to install the latest commit on `master` instead of this release.
 
 The package exposes `local_rag -> local_rag:register` through the official `hermes_agent.memory_providers` entry-point group. Model download and initial configuration are still required; the Dashboard plugin flow below is the recommended guided setup.
 
@@ -101,17 +105,27 @@ On Windows, use `python` (or `py`) instead of `python3`.
 
 Then restart the gateway, or start a new Desktop session.
 
+## Shared embedding daemon
+
+Embedding inference is stateless, so all Hermes profiles share one embedding daemon and the models of the root Hermes home on every platform: a profile home `<root>/profiles/<name>` maps to `<root>`. Extra profiles therefore do not load their own copy of the model and do not need their own models directory. Each profile still keeps its own memory database under its own `$HERMES_HOME/local-rag`.
+
+Set `LOCAL_RAG_INFERENCE_HOME` to point every profile at a different shared home (for example in the profile's `.env`). Restart the Hermes gateway after changing it.
+
+> **Behaviour change from upstream:** profiles that previously used models from their own home now use the models of the root home (or `LOCAL_RAG_INFERENCE_HOME`).
+
 ## Windows
 
 Native Windows Hermes runs its core on a bundled runtime, separate from the venv that holds Local RAG's heavy dependencies. The fork handles this split:
 
 - `$HERMES_HOME` defaults to `%LOCALAPPDATA%\hermes`; models, indexes and configuration live under it.
-- All Hermes profiles share one embedding daemon and the models of the root Hermes home (a profile home `<root>\profiles\<name>` maps to `<root>`); each profile keeps its own memory database under its own `$HERMES_HOME/local-rag`. Set `LOCAL_RAG_INFERENCE_HOME` to point every profile at a different shared home. Restart the Hermes gateway after changing it.
+- Profiles share one embedding daemon as on other platforms; a profile home `<root>\profiles\<name>` maps to `<root>` (see [Shared embedding daemon](#shared-embedding-daemon)).
 - Set `HERMES_PYTHON` to the venv interpreter, normally `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe`. The setup wizard and `install.py` install dependencies there, and the embedding service runs there as a child process. The Hermes core runtime does not need these packages, so a Hermes update that replaces it does not disable the provider.
 - The local inference service listens on `127.0.0.1` (TCP) instead of a Unix socket; requests are still authenticated with the existing random token file.
-- POSIX permission bits and checks (`0600` files, private directories) are skipped; private files rely on the user profile's access control.
+- POSIX permission bits (`0600` files, `0700` directories) are replaced by DACL checks. A private file or directory must be owned by the current user, SYSTEM or Administrators, must have a DACL, and may grant read/write only to those principals plus OWNER RIGHTS (the same trust set Windows OpenSSH uses for private keys). Insecure files are rejected, never repaired; new private files and directories are created with a protected DACL.
+- Symbolic links and junctions are rejected wherever POSIX uses `O_NOFOLLOW`.
 - Image OCR needs [Tesseract](https://github.com/tesseract-ocr/tesseract) on `PATH` (also on Linux); the Swift OCR fallback is macOS-only.
 - The `hermes local_rag` backfill CLI has not been verified on Windows.
+- Verified on Windows 10: 388 tests passed, 0 failed, 18 skipped (Hermes core, models, OCR, POSIX-only).
 
 ## Configuration
 
@@ -130,13 +144,13 @@ Native Windows Hermes runs its core on a bundled runtime, separate from the venv
 
 `debug_enabled` is a **Local RAG plugin setting**, off by default. Enable **Append Local RAG diagnostics to chat responses** in the plugin's settings and save configuration. An already-running provider picks up this flag on the next turn without reloading models.
 
-The native final-output hook adds a compact Russian Markdown footer: the provider's prefetch payload, explicit search results returned to the agent, confirmed saves/corrections/deletions, image/document operations, Markdown mirroring, and observed rejections or failures. Retrieval does not prove that the model used a fact or inspected image pixels. A missing save is not labelled a deliberate rejection; an ambiguous storage refusal remains ambiguous.
+The native final-output hook adds a compact English Markdown footer: the provider's prefetch payload, explicit search results returned to the agent, confirmed saves/corrections/deletions, image/document operations, Markdown mirroring, and observed rejections or failures. Retrieval does not prove that the model used a fact or inspected image pixels. A missing save is not labelled a deliberate rejection; an ambiguous storage refusal remains ambiguous.
 
 No extra LLM runs, application changes, transcript indexing, or separate diagnostic log are involved. The bounded in-memory trace is cleared on completion, session end/switch, or shutdown. **The footer exposes memory excerpts in the current chat and may be retained by that chat's normal history.** The flag applies to this Hermes profile; leave it off for chats where those excerpts should not be shown. Another plugin's first-winning output transform can suppress the footer; interrupted turns may not have a final footer.
 
 ## Backfill
 
-Raw transcript backfill is disabled. Historical sessions pass through role filtering, credential and prompt-injection rejection, bounded structured extraction, and strict validation. Preview writes only a mode-`0600` review artifact (on Windows, protected by the user profile's access control instead); every candidate starts rejected, and only explicitly accepted items can be applied. Namespace, project, session, timestamps, and source-message provenance come from the trusted export rather than the model.
+Raw transcript backfill is disabled. Historical sessions pass through role filtering, credential and prompt-injection rejection, bounded structured extraction, and strict validation. Preview writes only a mode-`0600` review artifact (on Windows, a file with a protected private DACL instead); every candidate starts rejected, and only explicitly accepted items can be applied. Namespace, project, session, timestamps, and source-message provenance come from the trusted export rather than the model.
 
 The Dashboard owns the normal preview → edit/accept → apply flow. The equivalent recovery CLI is:
 
